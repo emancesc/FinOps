@@ -18,10 +18,12 @@ import os
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="FinOps Agent 3 — Arbiter", version="0.2.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 # ---------------------------------------------------------------------------
 # Prompt templates (da spec 04-prompt-templates.md)

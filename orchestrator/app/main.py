@@ -10,6 +10,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Header
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from .db import get_pool, close_pool, _row_to_dict
 from .models import JobCreateRequest, JobResponse, AdvanceResponse
@@ -37,6 +38,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Frontend statico — servito su /ui/
+_FRONTEND_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "frontend")
+)
+if os.path.isdir(_FRONTEND_DIR):
+    app.mount("/ui", StaticFiles(directory=_FRONTEND_DIR, html=True), name="frontend")
 
 
 # ---------------------------------------------------------------------------

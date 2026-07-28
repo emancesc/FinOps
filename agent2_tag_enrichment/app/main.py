@@ -14,6 +14,7 @@ import os
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from redis import Redis
 from rq import Queue
@@ -21,6 +22,7 @@ from rq.job import Job, NoSuchJobError
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="FinOps Agent 2 — Tag Enrichment", version="0.2.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
 class IngestRequest(BaseModel):
