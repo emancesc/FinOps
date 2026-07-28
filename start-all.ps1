@@ -4,11 +4,29 @@
 
 $root = $PSScriptRoot
 
+# Legge il .env e costruisce il blocco di assegnazioni da iniettare in ogni finestra
+function Get-EnvBlock {
+    $lines = Get-Content "$root\.env" -ErrorAction SilentlyContinue
+    $assigns = @()
+    foreach ($line in $lines) {
+        if ($line -match '^\s*#' -or $line -match '^\s*$') { continue }
+        if ($line -match '^([A-Z_][A-Z0-9_]*)=(.*)$') {
+            $k = $matches[1]
+            $v = $matches[2].Trim().Trim('"').Trim("'")
+            if ($v -ne '') {
+                $assigns += "`$env:$k = '$v'"
+            }
+        }
+    }
+    return $assigns -join '; '
+}
+
+$envBlock = Get-EnvBlock
+
 function Start-Service {
     param($Title, $Dir, $Command)
-    Start-Process powershell -ArgumentList "-NoExit", "-Command",
-        "cd '$Dir'; `$env:PYTHONPATH='$Dir'; $Command" `
-        -WindowStyle Normal
+    $cmd = "$envBlock; cd '$Dir'; $Command"
+    Start-Process powershell -ArgumentList "-NoExit", "-Command", $cmd -WindowStyle Normal
     Write-Host "  Started: $Title" -ForegroundColor Green
 }
 
@@ -55,5 +73,14 @@ Start-Service "Agent4 Graph :8004" `
     "$root\agent4_graph_builder" `
     ".venv\Scripts\uvicorn.exe app.main:app --host 0.0.0.0 --port 8004 --reload"
 
-Write-Host "`nTutti i servizi avviati. Attendi ~10s per l'inizializzazione." -ForegroundColor Cyan
-Write-Host "Health check: http://localhost:8000/health`n"
+Write-Host "`nTutti i servizi avviati. Attendi ~15s per l'inizializzazione." -ForegroundColor Cyan
+Write-Host "Health check:"
+Start-Sleep 15
+@(8000,8001,8002,8003,8004) | ForEach-Object {
+    try {
+        $r = Invoke-RestMethod "http://localhost:$_/health" -TimeoutSec 4
+        Write-Host "  :$_ $($r.service) — OK" -ForegroundColor Green
+    } catch {
+        Write-Host "  :$_ — NON RISPONDE" -ForegroundColor Red
+    }
+}

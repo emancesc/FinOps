@@ -4,6 +4,8 @@ Worker RQ compatibile con Windows (TimerDeathPenalty).
 from __future__ import annotations
 import logging
 import os
+from dotenv import load_dotenv
+load_dotenv()
 
 from rq import SimpleWorker
 from rq.timeouts import TimerDeathPenalty

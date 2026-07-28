@@ -2,6 +2,8 @@
 from __future__ import annotations
 import asyncio
 import logging
+from dotenv import load_dotenv
+load_dotenv()
 
 from rq import SimpleWorker
 from rq.timeouts import TimerDeathPenalty
