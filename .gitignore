@@ -1,0 +1,33 @@
+# Ambienti virtuali Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Credenziali e segreti — MAI committare
+.env
+*.key
+*.pem
+secrets.yaml
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Log
+*.log
+logs/
+
+# Artefatti test
+.coverage
+htmlcov/

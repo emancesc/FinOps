@@ -1,0 +1,168 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: finops
+      POSTGRES_USER: finops
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finops -d finops"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_heap_max__size: 1G
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4jdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  # One-shot container che applica i vincoli Neo4j al primo avvio
+  neo4j-init:
+    image: neo4j:5-community
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/migrations
+    entrypoint: >
+      bash -c "cypher-shell -a bolt://neo4j:7687 -u neo4j -p ${NEO4J_PASSWORD}
+      --file /migrations/neo4j-init.cypher && echo 'Neo4j init completed'"
+    restart: "no"
+
+  orchestrator:
+    build: ./orchestrator
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  agent1:
+    build: ./agent1_resource_extractor
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8001:8000"
+
+  agent2:
+    build: ./agent2_tag_enrichment
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      agent1:
+        condition: service_started
+    ports:
+      - "8002:8000"
+
+  agent3:
+    build: ./agent3_arbiter
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8003:8000"
+
+  agent4:
+    build: ./agent4_graph_builder
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    ports:
+      - "8004:8000"
+
+  worker-extraction:
+    build: ./agent1_resource_extractor
+    command: rq worker extraction --url ${REDIS_URL}
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  worker-enrichment:
+    build: ./agent2_tag_enrichment
+    command: rq worker enrichment --url ${REDIS_URL}
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  worker-arbitration:
+    build: ./agent3_arbiter
+    command: rq worker arbitration --url ${REDIS_URL}
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  worker-graph:
+    build: ./agent4_graph_builder
+    command: rq worker graph_build --url ${REDIS_URL}
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+
+  frontend:
+    image: nginx:alpine
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+    ports:
+      - "8080:80"
+
+volumes:
+  pgdata:
+  neo4jdata:
