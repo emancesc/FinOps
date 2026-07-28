@@ -161,11 +161,53 @@ Astrazione comune su LLM diversi. Usata da Agent 2 e Agent 3 come dipendenza ins
 
 | Feature | Dettaglio |
 |---|---|
-| Provider supportati | `claude` (Anthropic SDK) · `azure_openai` (openai SDK) |
+| Provider supportati | `claude` · `azure_openai` · `bedrock` (AWS) |
 | Selezione runtime | Variabile d'ambiente `LLM_PROVIDER` |
 | Retry automatico | Fino a 3 tentativi su JSON malformato, con messaggio di correzione al modello |
 | Fence stripping | Rimuove automaticamente i blocchi ` ```json ` dalla risposta |
 | Validazione | Output validato con Pydantic prima di essere restituito al chiamante |
+
+#### Autenticazione SSO
+
+Il gateway supporta tre modalità di autenticazione, selezionabili senza modificare il codice:
+
+**1. Anthropic API key** (`LLM_PROVIDER=claude`)
+```env
+LLM_PROVIDER=claude
+ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_MODEL=claude-sonnet-4-6
+```
+
+**2. Azure OpenAI con API key o Entra ID SSO** (`LLM_PROVIDER=azure_openai`)
+```env
+LLM_PROVIDER=azure_openai
+AZURE_OPENAI_ENDPOINT=https://myorg.openai.azure.com
+AZURE_OPENAI_DEPLOYMENT=gpt-4o
+
+# Opzione A — API key statica
+AZURE_OPENAI_API_KEY=...
+
+# Opzione B — Azure AD SSO (DefaultAzureCredential: az login, Managed Identity, Workload Identity)
+AZURE_USE_SSO=true
+# AZURE_OPENAI_API_KEY non necessaria
+```
+Dipendenza opzionale: `pip install llm_gateway[azure-sso]`
+
+**3. Amazon Bedrock con AWS SSO** (`LLM_PROVIDER=bedrock`)
+
+Nessuna chiave statica: usa la credential chain AWS standard (IAM Identity Center, AssumeRole, instance profile).
+```env
+LLM_PROVIDER=bedrock
+BEDROCK_MODEL_ID=us.anthropic.claude-3-5-sonnet-20241022-v2:0
+BEDROCK_REGION=us-east-1
+
+# Opzione A — profilo SSO locale (dopo "aws configure sso" + "aws sso login --profile my-profile")
+AWS_PROFILE=my-sso-profile
+
+# Opzione B — AssumeRole (ambienti CI/CD, EC2 con instance profile)
+BEDROCK_ASSUME_ROLE_ARN=arn:aws:iam::123456789012:role/FinOpsLLM
+```
+Dipendenza opzionale: `pip install llm_gateway[bedrock]`
 
 ---
 
@@ -327,43 +369,70 @@ psql -U finops -d finops -f migrations/001_init_native.sql
 
 ```powershell
 # LLM Gateway (libreria condivisa — va installata per prima)
-cd llm_gateway && pip install -e . && cd ..
+cd llm_gateway
 
-# Ogni servizio ha il proprio requirements.txt
+pip install -e .                    # provider base (Claude + Azure OpenAI con API key)
+pip install -e ".[bedrock]"         # + Amazon Bedrock / AWS SSO
+pip install -e ".[azure-sso]"       # + Azure Entra ID SSO (DefaultAzureCredential)
+cd ..
+
+# Ogni servizio ha il proprio requirements.txt e .venv
 foreach ($svc in @("orchestrator","agent1_resource_extractor","agent2_tag_enrichment","agent3_arbiter","agent4_graph_builder")) {
-    pip install -r "$svc\requirements.txt"
+    python -m venv "$svc\.venv"
+    & "$svc\.venv\Scripts\pip.exe" install -r "$svc\requirements.txt"
+    & "$svc\.venv\Scripts\pip.exe" install -e llm_gateway   # agent2 e agent3 usano il gateway
 }
 ```
 
-### 5. Avvio servizi (7 terminali)
+### 5. Avvio servizi
+
+#### Opzione A — Script automatico (consigliato)
 
 ```powershell
-# Orchestrator API
+# Apre 8 finestre PowerShell (5 API + 3 RQ worker)
+.\start-all.ps1
+```
+
+Dopo ~10 secondi tutti i servizi sono operativi. Verifica:
+```powershell
+@(8000,8001,8002,8003,8004) | ForEach-Object { Invoke-RestMethod "http://localhost:$_/health" }
+```
+
+#### Opzione B — Avvio manuale (un terminale per servizio)
+
+```powershell
+# Terminale 1 — Orchestrator API
 cd orchestrator
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+.venv\Scripts\uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-# Orchestrator Worker (task extraction/enrichment/arbitration/graph_build)
-rq worker extraction enrichment arbitration graph_build `
-   --worker-class app.worker.WindowsWorker `
-   --url redis://localhost:6379/0
+# Terminale 2 — Orchestrator RQ Worker
+cd orchestrator
+.venv\Scripts\rq worker extraction enrichment arbitration graph_build `
+   --worker-class app.worker.WindowsWorker --url redis://localhost:6379/0
 
-# Agent 1 — Resource Extractor
+# Terminale 3 — Agent 1 API
 cd agent1_resource_extractor
-uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
-rq worker extraction --worker-class app.worker.WindowsWorker --url redis://localhost:6379/0
+.venv\Scripts\uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
 
-# Agent 2 — Tag Enrichment
+# Terminale 4 — Agent 1 RQ Worker
+cd agent1_resource_extractor
+.venv\Scripts\rq worker extraction --worker-class app.worker.WindowsWorker --url redis://localhost:6379/0
+
+# Terminale 5 — Agent 2 API
 cd agent2_tag_enrichment
-uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
-rq worker enrichment --worker-class app.worker.WindowsWorker --url redis://localhost:6379/0
+.venv\Scripts\uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
 
-# Agent 3 — Arbiter (solo API, nessun worker RQ)
+# Terminale 6 — Agent 2 RQ Worker
+cd agent2_tag_enrichment
+.venv\Scripts\rq worker enrichment --worker-class app.worker.WindowsWorker --url redis://localhost:6379/0
+
+# Terminale 7 — Agent 3 Arbiter (solo API, nessun worker RQ)
 cd agent3_arbiter
-uvicorn app.main:app --host 0.0.0.0 --port 8003 --reload
+.venv\Scripts\uvicorn app.main:app --host 0.0.0.0 --port 8003 --reload
 
-# Agent 4 — Graph Builder (solo API, nessun worker RQ)
+# Terminale 8 — Agent 4 Graph Builder (solo API, nessun worker RQ)
 cd agent4_graph_builder
-uvicorn app.main:app --host 0.0.0.0 --port 8004 --reload
+.venv\Scripts\uvicorn app.main:app --host 0.0.0.0 --port 8004 --reload
 ```
 
 ### 6. Primo job
@@ -492,6 +561,8 @@ python -m pytest tests/ -v
 | Agent 3 (arbiter) | 5 | Rule matching, LLM fallback, approve/reject, idempotenza |
 | Agent 4 (graph) | 8 | Sottografo, navigazione tag, navigazione attributi, whitelist, HTTP build |
 | Orchestrator e2e | 6 | Pipeline completa, failure extraction/graph_build, timeout, auto-approve |
+| LLM Gateway (base) | 13 | Claude/Azure retry, fence stripping, factory |
+| LLM Gateway (SSO) | 8 | Bedrock SSO, AssumeRole, Azure DefaultAzureCredential, errori import |
 
 ---
 
@@ -504,12 +575,17 @@ python -m pytest tests/ -v
 | `NEO4J_URI` | `bolt://localhost:7687` | URI Neo4j Bolt |
 | `NEO4J_USER` | `neo4j` | Utente Neo4j |
 | `NEO4J_PASSWORD` | — | Password Neo4j (obbligatoria) |
-| `LLM_PROVIDER` | `claude` | Provider LLM (`claude` \| `azure_openai`) |
-| `ANTHROPIC_API_KEY` | — | Chiave API Anthropic |
+| `LLM_PROVIDER` | `claude` | Provider LLM: `claude` · `azure_openai` · `bedrock` |
+| `ANTHROPIC_API_KEY` | — | Chiave API Anthropic (provider `claude`) |
 | `ANTHROPIC_MODEL` | `claude-sonnet-4-6` | Modello Claude |
-| `AZURE_OPENAI_API_KEY` | — | Chiave API Azure OpenAI |
+| `AZURE_OPENAI_API_KEY` | — | Chiave API Azure OpenAI (se `AZURE_USE_SSO=false`) |
 | `AZURE_OPENAI_ENDPOINT` | — | Endpoint Azure OpenAI |
 | `AZURE_OPENAI_DEPLOYMENT` | — | Nome deployment Azure |
+| `AZURE_USE_SSO` | `false` | `true` → DefaultAzureCredential (az login / Managed Identity) |
+| `BEDROCK_MODEL_ID` | `us.anthropic.claude-3-5-sonnet-20241022-v2:0` | Model ID Bedrock |
+| `BEDROCK_REGION` | `AWS_DEFAULT_REGION` | Region Bedrock |
+| `BEDROCK_ASSUME_ROLE_ARN` | — | ARN role per Bedrock (sovrascrive `AWS_ASSUME_ROLE_ARN`) |
+| `AWS_PROFILE` | — | Profilo SSO AWS (`aws configure sso` + `aws sso login`) |
 | `AWS_ASSUME_ROLE_ARN` | — | ARN del role da assumere per l'estrazione AWS |
 | `AWS_DEFAULT_REGION` | `eu-south-1` | Region AWS di default |
 | `AGENT1_URL` | `http://localhost:8001` | URL Agent 1 (visto dall'orchestratore) |
@@ -542,8 +618,9 @@ finops-tagging-platform/
 │   └── llm_gateway/
 │       ├── base.py              # LLMClient Protocol, LLMMessage, LLMResponse
 │       ├── claude_client.py     # ClaudeClient con retry + fence stripping
-│       ├── azure_openai_client.py
-│       └── factory.py           # get_llm_client() da env
+│       ├── azure_openai_client.py  # API key + Azure Entra ID SSO (DefaultAzureCredential)
+│       ├── bedrock_client.py    # Amazon Bedrock — AWS SSO / AssumeRole (no chiavi statiche)
+│       └── factory.py           # get_llm_client() → claude | azure_openai | bedrock
 ├── agent1_resource_extractor/   # Estrazione risorse AWS
 │   ├── app/
 │   │   ├── aws_client.py        # AWSClient (AssumeRole + describe_*)

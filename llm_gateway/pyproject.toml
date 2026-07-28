@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm_gateway"
-version = "0.1.0"
-description = "Shared LLM client with unified interface for Claude and Azure OpenAI"
+version = "0.2.0"
+description = "Shared LLM client — Claude API, Azure OpenAI (API key + Entra ID SSO), Amazon Bedrock (AWS SSO)"
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.9",
@@ -13,6 +13,14 @@ dependencies = [
     "openai>=1.50.0",
     "httpx>=0.27",
 ]
+
+[project.optional-dependencies]
+# pip install llm_gateway[bedrock]
+bedrock = ["boto3>=1.35"]
+# pip install llm_gateway[azure-sso]
+azure-sso = ["azure-identity>=1.18"]
+# pip install llm_gateway[all]
+all = ["boto3>=1.35", "azure-identity>=1.18"]
 
 [tool.setuptools.packages.find]
 where = ["."]

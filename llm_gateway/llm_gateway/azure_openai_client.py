@@ -1,4 +1,13 @@
+"""
+AzureOpenAIClient — supporta sia API key che Azure AD SSO.
+
+Modalità di autenticazione selezionata da AZURE_USE_SSO:
+  AZURE_USE_SSO=false (default): autenticazione con AZURE_OPENAI_API_KEY
+  AZURE_USE_SSO=true:            DefaultAzureCredential (Azure CLI, MSAL, Managed Identity,
+                                 Workload Identity Federation) — nessuna chiave statica
+"""
 from __future__ import annotations
+
 import json
 import os
 import re
@@ -16,20 +25,53 @@ def _strip_fence(text: str) -> str:
     return m.group(1).strip() if m else text.strip()
 
 
-class AzureOpenAIClient(LLMClient):
-    def __init__(self) -> None:
-        api_key = os.environ.get("AZURE_OPENAI_API_KEY")
-        endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
-        self._deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT")
-        if not all([api_key, endpoint, self._deployment]):
+def _use_sso() -> bool:
+    return os.environ.get("AZURE_USE_SSO", "false").lower() in ("1", "true", "yes")
+
+
+def _build_azure_client(deployment: str) -> AsyncAzureOpenAI:
+    endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
+    if not endpoint or not deployment:
+        raise RuntimeError(
+            "AZURE_OPENAI_ENDPOINT e AZURE_OPENAI_DEPLOYMENT devono essere impostate"
+        )
+
+    if _use_sso():
+        try:
+            from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+        except ImportError as e:
             raise RuntimeError(
-                "AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT e AZURE_OPENAI_DEPLOYMENT devono essere impostate"
+                "azure-identity non installato. Eseguire: pip install azure-identity"
+            ) from e
+        # DefaultAzureCredential prova in ordine: env vars, workload identity,
+        # managed identity, Azure CLI ("az login"), Azure Developer CLI, VS Code.
+        credential = DefaultAzureCredential()
+        token_provider = get_bearer_token_provider(
+            credential, "https://cognitiveservices.azure.com/.default"
+        )
+        return AsyncAzureOpenAI(
+            azure_endpoint=endpoint,
+            azure_ad_token_provider=token_provider,
+            api_version="2024-08-01-preview",
+        )
+    else:
+        api_key = os.environ.get("AZURE_OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "AZURE_OPENAI_API_KEY non impostata. "
+                "Impostare la chiave oppure abilitare AZURE_USE_SSO=true per l'autenticazione Azure AD."
             )
-        self._client = AsyncAzureOpenAI(
+        return AsyncAzureOpenAI(
             api_key=api_key,
             azure_endpoint=endpoint,
             api_version="2024-08-01-preview",
         )
+
+
+class AzureOpenAIClient(LLMClient):
+    def __init__(self) -> None:
+        self._deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "")
+        self._client = _build_azure_client(self._deployment)
 
     async def complete(
         self,
