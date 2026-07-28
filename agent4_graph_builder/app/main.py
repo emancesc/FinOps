@@ -10,6 +10,8 @@ GET  /health
 from __future__ import annotations
 
 import asyncio
+from dotenv import load_dotenv
+load_dotenv()
 import logging
 from typing import Any
 

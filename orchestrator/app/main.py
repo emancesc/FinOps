@@ -3,6 +3,8 @@ import asyncio
 import logging
 import os
 import uuid
+from dotenv import load_dotenv
+load_dotenv()
 from contextlib import asynccontextmanager
 from typing import Any
 
