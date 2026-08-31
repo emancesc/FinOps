@@ -43,6 +43,15 @@ class ExtractResourceTypeRequest(BaseModel):
     resource_type: Optional[str] = None
 
 
+class ExtractEvidenceRequest(BaseModel):
+    job_id: str
+    account_id: str
+    region: str
+    output_dir: Optional[str] = None
+    source_names: Optional[list[str]] = None
+    resource_types: Optional[list[str]] = None
+
+
 class TaskStatus(BaseModel):
     task_id: str
     status: str
@@ -69,6 +78,28 @@ def _queue() -> Queue:
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "agent1_resource_extractor"}
+
+
+@app.post("/extract/evidence", status_code=202)
+async def extract_evidence(req: ExtractEvidenceRequest):
+    """Genera un file JSON con le evidenze AWS per account/region."""
+    from .evidence import collect_aws_evidence
+
+    payload = collect_aws_evidence(
+        account_id=req.account_id,
+        region=req.region,
+        output_dir=req.output_dir,
+        source_names=req.source_names,
+        resource_types=req.resource_types,
+        filename=f"aws_evidence_{req.job_id}.json",
+    )
+
+    return {
+        "job_id": req.job_id,
+        "status": "generated",
+        "file_path": payload["file_path"],
+        "records": len(payload["records"]),
+    }
 
 
 @app.post("/extract/full", status_code=202)

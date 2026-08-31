@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinOps — Dashboard Job</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <nav>
+    <a class="brand" href="index.html">FinOps Tagging</a>
+    <a href="index.html">Setup Account</a>
+    <a href="dashboard.html" class="active">Dashboard</a>
+    <a href="review.html">Revisione Tag</a>
+    <a href="rules.html">Regole</a>
+    <a href="graph.html">Grafo</a>
+  </nav>
+  <main>
+    <h1>Dashboard Job</h1>
+    <div class="card" id="job-card">
+      <p>Job ID: <strong id="job-id">—</strong></p>
+      <p>Fase: <strong id="job-phase">—</strong></p>
+      <p>Dettaglio: <span id="job-detail">—</span></p>
+      <div class="progress-bar">
+        <div class="progress-bar-fill" id="progress-fill" style="width:0%"></div>
+      </div>
+      <p style="margin-top:0.5rem; font-size:0.8rem; color:#6b7280"><span id="progress-pct">0</span>%</p>
+    </div>
+    <div class="card">
+      <h2>Log eventi</h2>
+      <div id="log" style="font-family:monospace; font-size:0.8rem; max-height:300px; overflow-y:auto; background:#f3f4f6; padding:1rem; border-radius:6px;"></div>
+    </div>
+    <div class="card">
+      <a href="review.html" id="go-review" class="btn btn-primary" style="display:none">Vai alla Revisione Tag →</a>
+    </div>
+  </main>
+  <script src="js/api.js"></script>
+  <script src="js/ws.js"></script>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const jobId = params.get("job_id") || localStorage.getItem("last_job_id");
+    document.getElementById("job-id").textContent = jobId || "N/D";
+
+    function appendLog(msg) {
+      const el = document.getElementById("log");
+      el.innerHTML += `<div>${new Date().toLocaleTimeString()} — ${msg}</div>`;
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function updateJobUI(data) {
+      document.getElementById("job-phase").textContent = data.phase || "—";
+      document.getElementById("job-detail").textContent = data.status_detail || "—";
+      const pct = data.progress_pct || 0;
+      document.getElementById("progress-fill").style.width = pct + "%";
+      document.getElementById("progress-pct").textContent = pct;
+      appendLog(`Phase: ${data.phase} — ${data.status_detail || ""}`);
+      if (data.phase === "completed") {
+        document.getElementById("go-review").style.display = "inline-block";
+        document.getElementById("go-review").href = `review.html?job_id=${jobId}`;
+      }
+    }
+
+    if (jobId) {
+      // Carica stato iniziale
+      api.getJob(jobId).then(updateJobUI).catch(() => appendLog("Impossibile caricare job"));
+      // Aggiornamenti real-time
+      const sock = new JobSocket(jobId, updateJobUI);
+      sock.connect();
+    }
+  </script>
+</body>
+</html>

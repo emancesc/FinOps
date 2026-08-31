@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinOps — Revisione Tag</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <nav>
+    <a class="brand" href="index.html">FinOps Tagging</a>
+    <a href="index.html">Setup Account</a>
+    <a href="dashboard.html">Dashboard</a>
+    <a href="review.html" class="active">Revisione Tag</a>
+    <a href="rules.html">Regole</a>
+    <a href="graph.html">Grafo</a>
+  </nav>
+  <main>
+    <h1>Revisione Proposte di Tag</h1>
+    <div class="card">
+      <table id="proposals-table">
+        <thead>
+          <tr>
+            <th>Risorsa</th>
+            <th>Tag Key</th>
+            <th>Valore Proposto</th>
+            <th>Confidenza</th>
+            <th>Fonte</th>
+            <th>Stato</th>
+            <th>Azioni</th>
+          </tr>
+        </thead>
+        <tbody id="proposals-body">
+          <tr><td colspan="7" style="text-align:center; color:#6b7280;">Caricamento…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+  <script src="js/api.js"></script>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const jobId = params.get("job_id") || localStorage.getItem("last_job_id");
+
+    function badgeHtml(status) {
+      const cls = { pending: "badge-pending", approved: "badge-approved", rejected: "badge-rejected", edited: "badge-proposed" }[status] || "";
+      return `<span class="badge ${cls}">${status}</span>`;
+    }
+
+    async function loadProposals() {
+      if (!jobId) { document.getElementById("proposals-body").innerHTML = "<tr><td colspan='7'>Nessun job selezionato.</td></tr>"; return; }
+      try {
+        const proposals = await api.listProposals(jobId);
+        const tbody = document.getElementById("proposals-body");
+        if (!proposals.length) { tbody.innerHTML = "<tr><td colspan='7' style='text-align:center'>Nessuna proposta.</td></tr>"; return; }
+        tbody.innerHTML = proposals.map(p => `
+          <tr>
+            <td style="font-size:0.75rem; word-break:break-all">${p.resource_id}</td>
+            <td>${p.tag_key}</td>
+            <td>${p.tag_value ?? "—"}</td>
+            <td>${p.confidence != null ? Math.round(p.confidence * 100) + "%" : "—"}</td>
+            <td style="font-size:0.75rem">${p.source_ref || p.source_type}</td>
+            <td>${badgeHtml(p.review_status)}</td>
+            <td>
+              <button class="btn btn-success" style="margin-right:4px;padding:0.25rem 0.6rem;font-size:0.8rem" onclick="review('${p.id}','approved')">✓</button>
+              <button class="btn btn-danger" style="padding:0.25rem 0.6rem;font-size:0.8rem" onclick="review('${p.id}','rejected')">✗</button>
+            </td>
+          </tr>
+        `).join("");
+      } catch (err) {
+        document.getElementById("proposals-body").innerHTML = `<tr><td colspan='7'>Errore: ${err.message}</td></tr>`;
+      }
+    }
+
+    async function review(id, status) {
+      try {
+        await api.reviewProposal(id, { review_status: status });
+        loadProposals();
+      } catch (err) { alert("Errore: " + err.message); }
+    }
+
+    loadProposals();
+  </script>
+</body>
+</html>

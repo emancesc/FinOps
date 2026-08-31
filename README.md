@@ -456,6 +456,264 @@ curl "http://localhost:8004/graph/resource/arn:aws:ec2:eu-south-1:123456789012:i
 
 ---
 
+## Estrazione manuale delle risorse AWS (bypass Agent 1)
+
+Quando non è disponibile un ruolo IAM con AssumeRole, oppure si vuole pre-verificare i dati prima dell'ingestione, è possibile estrarre le risorse manualmente con AWS CLI e caricarle direttamente nel database, saltando del tutto l'Agent 1.
+
+### Prerequisiti
+
+- AWS CLI v2 configurato con profilo SSO o chiavi read-only
+- Accesso in lettura all'account e alla region target
+- `jq` opzionale (per filtrare/comprimere l'output prima dell'import)
+
+### Permessi IAM minimi necessari
+
+Il profilo o il role usato per l'estrazione deve avere **almeno** queste action in sola lettura:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": [
+      "ec2:DescribeInstances",
+      "ec2:DescribeVolumes",
+      "ec2:DescribeSnapshots",
+      "ec2:DescribeNetworkInterfaces",
+      "ec2:DescribeAddresses",
+      "ec2:DescribeVpcs",
+      "ec2:DescribeSubnets",
+      "ec2:DescribeSecurityGroups",
+      "elasticloadbalancing:DescribeLoadBalancers",
+      "elasticloadbalancing:DescribeTargetGroups",
+      "elasticloadbalancing:DescribeListeners",
+      "acm:ListCertificates",
+      "acm:DescribeCertificate",
+      "s3:ListAllMyBuckets",
+      "s3:GetBucketTagging",
+      "s3:GetBucketLocation",
+      "rds:DescribeDBInstances"
+    ],
+    "Resource": "*"
+  }]
+}
+```
+
+### Comandi AWS CLI per estrazione manuale
+
+Sostituire `<PROFILE>`, `<ACCOUNT_ID>` e `<REGION>` con i valori reali (es. `671594866096`, `eu-south-1`).
+
+```powershell
+$PROFILE = "cineca-readonly"
+$REGION  = "eu-south-1"
+$ACCOUNT = "671594866096"
+$OUT     = ".\extracted\$ACCOUNT\$REGION"
+New-Item -ItemType Directory -Force $OUT | Out-Null
+```
+
+#### EC2 Instances
+
+```bash
+aws ec2 describe-instances \
+  --profile $PROFILE --region $REGION \
+  --query 'Reservations[].Instances[]' \
+  --output json > $OUT/ec2_instances.json
+```
+
+#### EBS Volumes
+
+```bash
+aws ec2 describe-volumes \
+  --profile $PROFILE --region $REGION \
+  --query 'Volumes[]' \
+  --output json > $OUT/volumes.json
+```
+
+> Filtrare solo i volumi in uso:
+> `--filters Name=status,Values=in-use`
+
+#### EBS Snapshots
+
+```bash
+aws ec2 describe-snapshots \
+  --profile $PROFILE --region $REGION \
+  --owner-ids $ACCOUNT \
+  --query 'Snapshots[]' \
+  --output json > $OUT/snapshots.json
+```
+
+#### Network Interfaces (ENI)
+
+```bash
+aws ec2 describe-network-interfaces \
+  --profile $PROFILE --region $REGION \
+  --query 'NetworkInterfaces[]' \
+  --output json > $OUT/eni_attachments.json
+```
+
+#### Elastic IP (EIP)
+
+```bash
+aws ec2 describe-addresses \
+  --profile $PROFILE --region $REGION \
+  --query 'Addresses[]' \
+  --output json > $OUT/eip_associations.json
+```
+
+#### VPC, Subnet, Security Group
+
+```bash
+aws ec2 describe-vpcs \
+  --profile $PROFILE --region $REGION \
+  --query 'Vpcs[]' \
+  --output json > $OUT/vpcs.json
+
+aws ec2 describe-subnets \
+  --profile $PROFILE --region $REGION \
+  --query 'Subnets[]' \
+  --output json > $OUT/subnets.json
+
+aws ec2 describe-security-groups \
+  --profile $PROFILE --region $REGION \
+  --query 'SecurityGroups[]' \
+  --output json > $OUT/security_groups.json
+```
+
+#### Load Balancer (ALB / NLB)
+
+```bash
+aws elbv2 describe-load-balancers \
+  --profile $PROFILE --region $REGION \
+  --query 'LoadBalancers[]' \
+  --output json > $OUT/load_balancers.json
+
+aws elbv2 describe-target-groups \
+  --profile $PROFILE --region $REGION \
+  --query 'TargetGroups[]' \
+  --output json > $OUT/target_groups.json
+```
+
+#### ACM Certificates
+
+```bash
+# Lista con ARN
+aws acm list-certificates \
+  --profile $PROFILE --region $REGION \
+  --query 'CertificateSummaryList[]' \
+  --output json > $OUT/acm_list.json
+
+# Dettaglio completo (InUsedBy, domini SAN, ecc.)
+aws acm list-certificates \
+  --profile $PROFILE --region $REGION \
+  --query 'CertificateSummaryList[].CertificateArn' \
+  --output text | tr '\t' '\n' | while read ARN; do
+    aws acm describe-certificate \
+      --profile $PROFILE --region $REGION \
+      --certificate-arn "$ARN" \
+      --query 'Certificate'
+  done | jq -s '.' > $OUT/acm_full.json
+```
+
+#### S3 Buckets
+
+```bash
+aws s3api list-buckets \
+  --profile $PROFILE \
+  --query 'Buckets[]' \
+  --output json > $OUT/s3_buckets.json
+```
+
+#### RDS
+
+```bash
+aws rds describe-db-instances \
+  --profile $PROFILE --region $REGION \
+  --query 'DBInstances[]' \
+  --output json > $OUT/rds_instances.json
+```
+
+---
+
+### Caricamento dei file estratti nel database (bypass Agent 1)
+
+Una volta ottenuti i file JSON, inserirli in `raw_resources` saltando la chiamata AWS live.
+
+#### Opzione A — Script Python di import diretto
+
+```powershell
+# Dalla root del repository
+cd agent1_resource_extractor
+.venv\Scripts\python.exe - << 'EOF'
+import json, sys, os
+from dotenv import load_dotenv
+load_dotenv()
+from app.db import upsert_resources
+from app.normalizer import normalize_ec2, normalize_volume, normalize_eni  # adattare per tipo
+
+JOB_ID = "<JOB_ID>"          # UUID del job già creato via POST /jobs
+BASE    = r".\extracted\671594866096\eu-south-1"
+
+# Istanze EC2
+with open(f"{BASE}/ec2_instances.json") as f:
+    instances = json.load(f)
+resources = [normalize_ec2(i) for i in instances]
+upsert_resources(JOB_ID, resources)
+print(f"EC2 instances: {len(resources)}")
+
+# Aggiungere blocchi analoghi per volumes, ENI, LB, ecc.
+EOF
+```
+
+#### Opzione B — Import via endpoint `resource-type` (con file locale)
+
+Agent 1 espone `POST /extract/resource-type/{type}` in modalità sincrona. Se si modifica temporaneamente il client AWS per leggere da file invece che da API live, è sufficiente:
+
+```bash
+# Verifica che il job esista
+curl http://localhost:8000/jobs/<JOB_ID>
+
+# L'endpoint chiama AWSClient internamente:
+# per l'import offline settare AWS_ENDPOINT_URL=http://localhost:4566 (LocalStack)
+# oppure usare lo script Python dell'opzione A.
+```
+
+#### Passare alla fase successiva dopo l'import
+
+Una volta che `raw_resources` contiene le risorse per il job, avanzare manualmente la state machine saltando la fase `extraction`:
+
+```bash
+# Avanza da 'created' a 'extraction' (se non già fatto)
+curl -X POST http://localhost:8000/jobs/<JOB_ID>/advance
+
+# Poiché l'estrazione è già avvenuta manualmente, segnalare la fase come completata
+# aggiornando direttamente la tabella jobs (o tramite l'endpoint /advance):
+psql -U finops -d finops -c \
+  "UPDATE jobs SET phase='enrichment', progress_pct=25 WHERE job_id='<JOB_ID>'"
+
+# Quindi avanzare la pipeline normalmente
+curl -X POST http://localhost:8000/jobs/<JOB_ID>/advance
+```
+
+---
+
+### File minimi richiesti per l'analisi IDM (account `671594866096`, region `eu-south-1`)
+
+| File | Comando | Contenuto chiave |
+|------|---------|-----------------|
+| `ec2_instances.json` | `describe-instances` | `InstanceId`, `Tags`, `SubnetId`, `SecurityGroups` |
+| `volumes.json` | `describe-volumes` | `VolumeId`, `Attachments[].InstanceId`, `Tags` |
+| `snapshots.json` | `describe-snapshots --owner-ids self` | `SnapshotId`, `VolumeId`, `Tags` |
+| `eni_attachments.json` | `describe-network-interfaces` | `Description` (identifica servizio), `Attachment.InstanceId` |
+| `eip_associations.json` | `describe-addresses` | `AllocationId`, `AssociationId`, `NetworkInterfaceId` |
+| `load_balancers.json` | `elbv2 describe-load-balancers` | `LoadBalancerArn`, `Type` (ALB/NLB), `DNSName` |
+| `acm_full.json` | `acm list-certificates` + `describe-certificate` | `InUseBy[]`, `DomainName`, `SubjectAlternativeNames` |
+| `vpcs.json` | `describe-vpcs` | `VpcId`, `CidrBlock`, `Tags` |
+| `subnets.json` | `describe-subnets` | `SubnetId`, `AvailabilityZone`, `VpcId` |
+
+> **Nota**: le descrizioni ENI (es. `"IDM-Frontend idp5fe-aws-05 reserved IP"`, `"LDAP ldap-aws-36 reserved IP"`) sono la fonte primaria per identificare servizio e tier di ogni istanza. Assicurarsi di includere sempre `eni_attachments.json` nell'import.
+
+---
+
 ## API Reference
 
 ### Orchestrator (:8000)

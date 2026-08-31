@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinOps — Registro Regole</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <nav>
+    <a class="brand" href="index.html">FinOps Tagging</a>
+    <a href="index.html">Setup Account</a>
+    <a href="dashboard.html">Dashboard</a>
+    <a href="review.html">Revisione Tag</a>
+    <a href="rules.html" class="active">Regole</a>
+    <a href="graph.html">Grafo</a>
+  </nav>
+  <main>
+    <h1>Registro Regole di Tagging</h1>
+    <div class="card">
+      <table id="rules-table">
+        <thead>
+          <tr>
+            <th>Tag Key</th>
+            <th>Condizione</th>
+            <th>Risoluzione</th>
+            <th>Stato</th>
+            <th>Approvato da</th>
+            <th>Azioni</th>
+          </tr>
+        </thead>
+        <tbody id="rules-body">
+          <tr><td colspan="6" style="text-align:center; color:#6b7280;">Caricamento…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+  <script src="js/api.js"></script>
+  <script>
+    const tenantId = localStorage.getItem("last_tenant_id") || "";
+
+    function badgeHtml(status) {
+      const cls = { proposed: "badge-proposed", approved: "badge-approved", rejected: "badge-rejected" }[status] || "";
+      return `<span class="badge ${cls}">${status}</span>`;
+    }
+
+    async function loadRules() {
+      try {
+        const rules = await api.listRules(tenantId);
+        const tbody = document.getElementById("rules-body");
+        if (!rules.length) { tbody.innerHTML = "<tr><td colspan='6' style='text-align:center'>Nessuna regola.</td></tr>"; return; }
+        tbody.innerHTML = rules.map(r => `
+          <tr>
+            <td>${r.tag_key}</td>
+            <td><pre style="font-size:0.75rem;margin:0">${JSON.stringify(r.condition, null, 2)}</pre></td>
+            <td><pre style="font-size:0.75rem;margin:0">${JSON.stringify(r.resolution, null, 2)}</pre></td>
+            <td>${badgeHtml(r.status)}</td>
+            <td>${r.approved_by || "—"}</td>
+            <td>
+              ${r.status === "proposed" ? `
+                <button class="btn btn-success" style="margin-right:4px;padding:0.25rem 0.6rem;font-size:0.8rem" onclick="approveRule('${r.rule_id}')">Approva</button>
+                <button class="btn btn-danger" style="padding:0.25rem 0.6rem;font-size:0.8rem" onclick="rejectRule('${r.rule_id}')">Rifiuta</button>
+              ` : "—"}
+            </td>
+          </tr>
+        `).join("");
+      } catch (err) {
+        document.getElementById("rules-body").innerHTML = `<tr><td colspan='6'>Errore: ${err.message}</td></tr>`;
+      }
+    }
+
+    async function approveRule(id) {
+      try { await api.approveRule(id); loadRules(); } catch (err) { alert("Errore: " + err.message); }
+    }
+    async function rejectRule(id) {
+      try { await api.rejectRule(id); loadRules(); } catch (err) { alert("Errore: " + err.message); }
+    }
+
+    loadRules();
+  </script>
+</body>
+</html>

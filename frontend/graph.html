@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinOps — Esplorazione Grafo</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+</head>
+<body>
+  <nav>
+    <a class="brand" href="index.html">FinOps Tagging</a>
+    <a href="index.html">Setup Account</a>
+    <a href="dashboard.html">Dashboard</a>
+    <a href="review.html">Revisione Tag</a>
+    <a href="rules.html">Regole</a>
+    <a href="graph.html" class="active">Grafo</a>
+  </nav>
+  <main>
+    <h1>Esplorazione Knowledge Graph</h1>
+    <div class="card">
+      <div style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap; margin-bottom:1rem;">
+        <div style="flex:1; min-width:200px;">
+          <label>ARN risorsa (sottografo)</label>
+          <input type="text" id="arn-input" placeholder="arn:aws:ec2:eu-south-1:1234:instance/i-xxxx" />
+        </div>
+        <button class="btn btn-primary" onclick="loadByArn()">Cerca per ARN</button>
+        <div style="flex:1; min-width:200px;">
+          <label>Dimensione di raggruppamento</label>
+          <select id="dim-select">
+            <option value="business_unit">Business Unit</option>
+            <option value="environment">Environment</option>
+            <option value="cost_center">Cost Center</option>
+            <option value="customer">Customer</option>
+            <option value="application">Application</option>
+          </select>
+        </div>
+        <div style="flex:1; min-width:180px;">
+          <label>Valore</label>
+          <input type="text" id="dim-value" placeholder="es. BU-Infrastrutttura" />
+        </div>
+        <button class="btn btn-secondary" onclick="loadByGroup()">Filtra per gruppo</button>
+      </div>
+      <div class="view-toggle" style="margin-bottom:0.75rem; display:flex; gap:0.5rem;">
+        <button id="btn-view-architectural" class="btn btn-primary" onclick="graphModule.toggleView('architectural')">Vista architetturale</button>
+        <button id="btn-view-tagging" class="btn btn-secondary" onclick="graphModule.toggleView('tagging')">Vista tagging</button>
+      </div>
+      <div id="graph-container"></div>
+    </div>
+    <div class="card" id="node-detail" style="display:none;">
+      <h2>Dettaglio nodo</h2>
+      <pre id="node-detail-content" style="font-size:0.8rem; overflow:auto;"></pre>
+    </div>
+  </main>
+  <script src="js/api.js"></script>
+  <script src="js/graph.js"></script>
+  <script>
+    graphModule.initGraph("graph-container");
+
+    // Mostra dettaglio al click su un nodo
+    document.addEventListener("DOMContentLoaded", () => {
+      // cy è disponibile tramite chiusura in graph.js — aggiungo listener dopo init
+      setTimeout(() => {
+        if (window.cy) {
+          window.cy.on("tap", "node", (evt) => {
+            const data = evt.target.data();
+            document.getElementById("node-detail").style.display = "block";
+            document.getElementById("node-detail-content").textContent = JSON.stringify(data, null, 2);
+          });
+        }
+      }, 200);
+    });
+
+    async function loadByArn() {
+      const arn = document.getElementById("arn-input").value.trim();
+      if (!arn) return;
+      try {
+        const data = await api.getGraphResource(arn);
+        graphModule.loadGraphData(graphModule.convertNeo4jToElements(data));
+      } catch (err) { alert("Errore: " + err.message); }
+    }
+
+    async function loadByGroup() {
+      const dim = document.getElementById("dim-select").value;
+      const val = document.getElementById("dim-value").value.trim();
+      if (!val) return;
+      try {
+        const data = await api.getGraphGroup(dim, val);
+        graphModule.loadGraphData(graphModule.convertNeo4jToElements(data));
+      } catch (err) { alert("Errore: " + err.message); }
+    }
+  </script>
+</body>
+</html>

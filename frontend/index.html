@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinOps Tagging Platform — Setup Account</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <nav>
+    <a class="brand" href="index.html">FinOps Tagging</a>
+    <a href="index.html" class="active">Setup Account</a>
+    <a href="dashboard.html">Dashboard</a>
+    <a href="review.html">Revisione Tag</a>
+    <a href="rules.html">Regole</a>
+    <a href="graph.html">Grafo</a>
+  </nav>
+  <main>
+    <h1>Setup Account AWS</h1>
+    <div class="card">
+      <h2>Crea nuovo job di analisi</h2>
+      <form id="form-create-job">
+        <div class="form-group">
+          <label for="account_id">Account ID AWS</label>
+          <input type="text" id="account_id" placeholder="123456789012" required />
+        </div>
+        <div class="form-group">
+          <label for="region">Regione AWS</label>
+          <input type="text" id="region" placeholder="eu-south-1" required />
+        </div>
+        <div class="form-group">
+          <label for="tenant_id">Tenant ID</label>
+          <input type="text" id="tenant_id" placeholder="cliente-acme" required />
+        </div>
+        <div class="form-group">
+          <label for="role_arn">Role ARN (AssumeRole)</label>
+          <input type="text" id="role_arn" placeholder="arn:aws:iam::123456789012:role/FinOpsReadOnly" required />
+        </div>
+        <button type="submit" class="btn btn-primary">Crea Job</button>
+      </form>
+    </div>
+    <div class="card" id="job-result" style="display:none">
+      <h2>Job creato</h2>
+      <p>Job ID: <strong id="created-job-id"></strong></p>
+      <p><a href="dashboard.html" id="go-dashboard">Vai alla Dashboard →</a></p>
+    </div>
+  </main>
+  <script src="js/api.js"></script>
+  <script>
+    document.getElementById("form-create-job").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const payload = {
+        account_id: document.getElementById("account_id").value,
+        region: document.getElementById("region").value,
+        tenant_id: document.getElementById("tenant_id").value,
+        role_arn: document.getElementById("role_arn").value,
+      };
+      try {
+        const job = await api.createJob(payload);
+        document.getElementById("created-job-id").textContent = job.job_id;
+        document.getElementById("go-dashboard").href = `dashboard.html?job_id=${job.job_id}`;
+        document.getElementById("job-result").style.display = "block";
+        localStorage.setItem("last_job_id", job.job_id);
+        localStorage.setItem("last_tenant_id", payload.tenant_id);
+      } catch (err) {
+        alert("Errore: " + err.message);
+      }
+    });
+  </script>
+</body>
+</html>
