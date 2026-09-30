@@ -107,6 +107,7 @@
       <h2>Job creato</h2>
       <p>Job ID: <strong id="created-job-id"></strong></p>
       <p><a href="dashboard.html" id="go-dashboard">Vai alla Dashboard →</a></p>
+      <p><a href="proposals.html" id="go-proposals">Carica i documenti di Design e Assessment e genera la proposta →</a></p>
     </div>
   </main>
   <script src="js/api.js"></script>
@@ -131,6 +132,7 @@
         const job = await api.createJob(payload);
         document.getElementById("created-job-id").textContent = job.job_id;
         document.getElementById("go-dashboard").href = `dashboard.html?job_id=${job.job_id}`;
+        document.getElementById("go-proposals").href = `proposals.html?job_id=${job.job_id}`;
         document.getElementById("job-result").style.display = "block";
         localStorage.setItem("last_job_id", job.job_id);
         localStorage.setItem("last_tenant_id", payload.tenant_id);

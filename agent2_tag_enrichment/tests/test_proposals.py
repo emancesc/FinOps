@@ -177,6 +177,13 @@ async def test_generate_inherit_validate_review(api, world, tmp_path):
                          data={"doc_type": "LLD"})
     assert r.status_code == 201 and r.json()["chunks"] == 1
     assert (await c.get(f"/documents/{world['job_id']}")).json()[0]["doc_type"] == "LLD"
+    extra = tmp_path / "assessment.txt"
+    extra.write_text("assessment da rimuovere", encoding="utf-8")
+    with open(extra, "rb") as f:
+        doc_id = (await c.post(f"/documents/{world['job_id']}", files={"file": ("assessment.txt", f, "text/plain")},
+                               data={"doc_type": "PRE_MIGRATION_ASSESSMENT"})).json()["document_id"]
+    assert (await c.delete(f"/documents/item/{doc_id}")).status_code == 200
+    assert [d["file_name"] for d in (await c.get(f"/documents/{world['job_id']}")).json()] == ["LLD_esse3.txt"]
 
     run = (await c.post("/proposals/generate", json={"job_id": world["job_id"]})).json()
     await _wait(main, run["run_id"])

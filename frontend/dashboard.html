@@ -36,6 +36,7 @@
     </div>
     <div class="card">
       <a href="inventory.html" id="go-inventory" class="btn btn-secondary">Inventario risorse →</a>
+      <a href="proposals.html" id="go-proposals" class="btn btn-secondary">Documenti Design/Assessment e proposta →</a>
       <a href="review.html" id="go-review" class="btn btn-primary" style="display:none">Vai alla Revisione Tag →</a>
     </div>
   </main>
@@ -58,6 +59,7 @@
       document.getElementById("job-regions").textContent =
         regions === "all" ? "tutte le regioni abilitate" : regions.split(",").join(", ");
       document.getElementById("go-inventory").href = `inventory.html?job_id=${jobId}`;
+      document.getElementById("go-proposals").href = `proposals.html?job_id=${jobId}`;
     }
 
     function updateJobUI(data) {

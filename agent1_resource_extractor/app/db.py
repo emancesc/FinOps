@@ -51,6 +51,10 @@ def upsert_resources(job_id: str, resources: list[NormalizedResource]) -> int:
                          current_tags, attributes, relationships)
                     VALUES %s
                     ON CONFLICT (resource_id) DO UPDATE SET
+                        job_id        = EXCLUDED.job_id,   -- la risorsa appartiene all'ultimo job che l'ha estratta
+                        account_id    = EXCLUDED.account_id,
+                        region        = EXCLUDED.region,
+                        resource_type = EXCLUDED.resource_type,
                         current_tags  = EXCLUDED.current_tags,
                         attributes    = EXCLUDED.attributes,
                         relationships = EXCLUDED.relationships,

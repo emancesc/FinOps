@@ -131,8 +131,14 @@ def list_documents(job_id: str) -> list[dict]:
 
 
 def delete_document(document_id: str) -> Optional[str]:
-    rows = _fetch("DELETE FROM documents WHERE document_id = %s::uuid RETURNING storage_path", (document_id,))
-    return rows[0]["storage_path"] if rows else None
+    conn = _connect()
+    try:
+        with conn, conn.cursor() as cur:  # "with conn" = commit (i chunk vanno via in cascata)
+            cur.execute("DELETE FROM documents WHERE document_id = %s::uuid RETURNING storage_path", (document_id,))
+            row = cur.fetchone()
+            return row[0] if row else None
+    finally:
+        conn.close()
 
 
 def load_document_chunks(job_id: str) -> list[dict]:
