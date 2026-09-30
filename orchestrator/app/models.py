@@ -12,7 +12,8 @@ class DocumentInput(BaseModel):
 
 class JobCreateRequest(BaseModel):
     account_id: str
-    region: str
+    # "all" (default) = tutte le regioni abilitate; oppure "eu-south-1" o "a,b"
+    region: str = "all"
     tenant_id: str
     documents: list[DocumentInput] = []
 

@@ -31,3 +31,6 @@ logs/
 # Artefatti test
 .coverage
 htmlcov/
+
+# Export reali delle evidenze AWS (dati di account): non versionare
+agent1_resource_extractor/exports/*.json

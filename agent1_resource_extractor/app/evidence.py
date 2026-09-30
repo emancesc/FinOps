@@ -1,12 +1,62 @@
+"""
+Raccolta evidenze AWS per account.
+
+``region`` accetta una regione, una lista "a,b" oppure "all" (tutte le regioni
+abilitate). Le sorgenti regionali (aws-config, ec2-eni, elb, cloudtrail,
+ssm-inventory, sqs) vengono eseguite per ogni regione, in parallelo; quelle
+globali (cloudfront, route53, oc-routes, terraform-state) una sola volta.
+"""
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 import boto3
+
+from .aws_client import (
+    _CONFIG_SELECT_FIELDS,
+    _MAX_REGION_WORKERS,
+    _default_home_region,
+    parse_region_spec,
+)
+
+logger = logging.getLogger(__name__)
+
+REGIONAL_SOURCE_NAMES = ["aws-config", "ec2-eni", "elb", "cloudtrail", "ssm-inventory", "sqs"]
+GLOBAL_SOURCE_NAMES = ["cloudfront", "route53", "oc-routes", "terraform-state"]
+GLOBAL_REGION_LABEL = "global"
+
+# La creazione di client dalla sessione di default di boto3 non e' thread-safe
+# (i client creati invece lo sono): la serializziamo.
+_CLIENT_LOCK = threading.Lock()
+
+
+def _client(service_name: str, region_name: str | None = None):
+    with _CLIENT_LOCK:
+        if region_name is None:
+            return boto3.client(service_name)
+        return boto3.client(service_name, region_name=region_name)
+
+
+def resolve_regions(region: str | None) -> list[str]:
+    """Espande "all" nelle regioni abilitate (describe_regions)."""
+    requested = parse_region_spec(region)
+    if requested:
+        return requested
+    home = _default_home_region()
+    try:
+        resp = _client("ec2", home).describe_regions()
+        regions = sorted(r["RegionName"] for r in resp.get("Regions", []))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("describe_regions fallita (%s): uso solo %s", exc, home)
+        return [home]
+    return regions or [home]
 
 
 DEFAULT_SOURCE_NAMES = [
@@ -63,6 +113,15 @@ def _make_record(
     }
 
 
+def _parse_json(value: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value
+    return value
+
+
 def _iter_resource_types(resource_types: Iterable[str] | None) -> list[str]:
     if resource_types:
         return list(resource_types)
@@ -81,53 +140,58 @@ def _collect_aws_config_evidence(
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     try:
-        client = boto3.client("config", region_name=region)
-        for resource_type in resource_types:
-            if resource_type in {"AWS::EC2::Volume", "AWS::EC2::NetworkInterface"}:
-                expr = (
-                    "SELECT resourceId, arn, resourceType, accountId, region, configuration, tags "
-                    f"WHERE resourceType = '{resource_type}'"
-                )
-                kwargs: dict[str, Any] = {"Expression": expr, "Limit": 100}
-                while True:
-                    resp = client.select_resource_config(**kwargs)
-                    for item in resp.get("Results", []):
-                        payload = json.loads(item)
-                        records.append(
-                            _make_record(
-                                account_id=account_id,
-                                region=region,
-                                resource_type=resource_type,
-                                source="aws-config",
-                                evidence_type="resource_config",
-                                value={
-                                    "resourceId": payload.get("resourceId"),
-                                    "arn": payload.get("arn"),
-                                    "configuration": payload.get("configuration"),
-                                    "tags": payload.get("tags", []),
-                                },
-                                confidence=0.85,
-                                reason="Live AWS Config snapshot for resource history and attachment context",
-                            )
-                        )
-                    next_token = resp.get("NextToken")
-                    if not next_token:
-                        break
-                    kwargs["NextToken"] = next_token
+        client = _client("config", region)
     except Exception as exc:  # noqa: BLE001
-        records.append(
-            _make_record(
-                account_id=account_id,
-                region=region,
-                resource_type="AWS::EC2::Volume",
-                source="aws-config",
-                evidence_type="service_error",
-                value={"error": str(exc)},
-                confidence=0.0,
-                reason="AWS Config not available or permissions missing; collection failed gracefully",
-            )
+        return [_config_error(account_id, region, "AWS::Config::ResourceCompliance", exc)]
+    for resource_type in resource_types:
+        expr = (
+            f"SELECT {_CONFIG_SELECT_FIELDS}, relationships, configurationItemCaptureTime, "
+            f"configurationItemStatus WHERE resourceType = '{resource_type}'"
         )
+        kwargs: dict[str, Any] = {"Expression": expr, "Limit": 100}
+        try:
+            while True:
+                resp = client.select_resource_config(**kwargs)
+                for item in resp.get("Results", []):
+                    payload = json.loads(item)
+                    config = payload.get("configuration")
+                    if isinstance(config, str):
+                        try:
+                            payload["configuration"] = json.loads(config)
+                        except ValueError:
+                            pass
+                    records.append(
+                        _make_record(
+                            account_id=account_id,
+                            region=payload.get("awsRegion") or region,
+                            resource_type=resource_type,
+                            source="aws-config",
+                            evidence_type="resource_config",
+                            value=payload,
+                            confidence=0.85,
+                            reason="Live AWS Config snapshot for resource history and attachment context",
+                        )
+                    )
+                next_token = resp.get("NextToken")
+                if not next_token:
+                    break
+                kwargs["NextToken"] = next_token
+        except Exception as exc:  # noqa: BLE001
+            records.append(_config_error(account_id, region, resource_type, exc))
     return records
+
+
+def _config_error(account_id: str, region: str, resource_type: str, exc: Exception) -> dict[str, Any]:
+    return _make_record(
+        account_id=account_id,
+        region=region,
+        resource_type=resource_type,
+        source="aws-config",
+        evidence_type="service_error",
+        value={"error": str(exc)},
+        confidence=0.0,
+        reason="AWS Config not available or permissions missing; collection failed gracefully",
+    )
 
 
 def _collect_ec2_eni_evidence(
@@ -137,7 +201,7 @@ def _collect_ec2_eni_evidence(
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     try:
-        ec2 = boto3.client("ec2", region_name=region)
+        ec2 = _client("ec2", region)
         if "AWS::EC2::NetworkInterface" not in resource_types:
             return records
 
@@ -164,6 +228,7 @@ def _collect_ec2_eni_evidence(
                                 "status": attachment.get("Status"),
                             },
                             "tags": eni.get("TagSet", []),
+                            "raw": eni,
                         },
                         confidence=0.9,
                         reason="EC2 ENI attributes showing service owner and last attachment state",
@@ -192,7 +257,7 @@ def _collect_elb_evidence(
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     try:
-        elb = boto3.client("elbv2", region_name=region)
+        elb = _client("elbv2", region)
         if "AWS::ELBv2::LoadBalancer" not in resource_types:
             return records
 
@@ -228,6 +293,7 @@ def _collect_elb_evidence(
                             "vpc_id": lb.get("VpcId"),
                             "availability_zones": lb.get("AvailabilityZones", []),
                             "listeners": rules_by_listener,
+                            "raw": lb,
                         },
                         confidence=0.95,
                         reason="Application/Network Load Balancer metadata confirming ownership and listener configuration",
@@ -252,7 +318,7 @@ def _collect_elb_evidence(
 def _collect_cloudtrail_evidence(account_id: str, region: str) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     try:
-        client = boto3.client("cloudtrail", region_name=region)
+        client = _client("cloudtrail", region)
         event_names = ["CreateVolume", "CreateNetworkInterface", "CreateQueue"]
         for event_name in event_names:
             kwargs: dict[str, Any] = {
@@ -277,6 +343,7 @@ def _collect_cloudtrail_evidence(account_id: str, region: str) -> list[dict[str,
                                 "user_identity": identity,
                                 "resources": event.get("Resources", []),
                                 "event_source": event.get("EventSource"),
+                                "cloudtrail_event": _parse_json(event.get("CloudTrailEvent")),
                             },
                             confidence=0.8,
                             reason="CloudTrail creator/userIdentity for creation events relevant to ownership attribution",
@@ -305,7 +372,8 @@ def _collect_cloudtrail_evidence(account_id: str, region: str) -> list[dict[str,
 def _collect_terraform_state_evidence(account_id: str, region: str) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     try:
-        s3 = boto3.client("s3", region_name=region)
+        # Sorgente globale: in multi-regione region == "global", non valida per il client.
+        s3 = _client("s3", _default_home_region() if region == GLOBAL_REGION_LABEL else region)
         buckets = s3.list_buckets().get("Buckets", [])
         matches = [b["Name"] for b in buckets if "cineca-tf-state-" in b["Name"]]
         if not matches:
@@ -347,7 +415,7 @@ def _collect_terraform_state_evidence(account_id: str, region: str) -> list[dict
                                 "key": key,
                                 "module": payload.get("module"),
                                 "resource_count": len(resources),
-                                "resources": resources[:10],
+                                "resources": resources,
                             },
                             confidence=0.85,
                             reason="Terraform state object with module/repository ownership metadata",
@@ -375,8 +443,8 @@ def _collect_terraform_state_evidence(account_id: str, region: str) -> list[dict
 def _collect_ssm_inventory_evidence(account_id: str, region: str) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     try:
-        ssm = boto3.client("ssm", region_name=region)
-        ec2 = boto3.client("ec2", region_name=region)
+        ssm = _client("ssm", region)
+        ec2 = _client("ec2", region)
         instances = []
         for page in ec2.get_paginator("describe_instances").paginate():
             for reservation in page.get("Reservations", []):
@@ -450,7 +518,7 @@ def _collect_ssm_inventory_evidence(account_id: str, region: str) -> list[dict[s
 def _collect_sqs_evidence(account_id: str, region: str) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     try:
-        sqs = boto3.client("sqs", region_name=region)
+        sqs = _client("sqs", region)
         kwargs: dict[str, Any] = {}
         while True:
             response = sqs.list_queues(**kwargs)
@@ -487,6 +555,7 @@ def _collect_sqs_evidence(account_id: str, region: str) -> list[dict[str, Any]]:
                             "redrive_policy": attributes.get("RedrivePolicy"),
                             "policy": attributes.get("Policy"),
                             "owner_account_id": attributes.get("OwnerAccountId"),
+                            "attributes": attributes,
                         },
                         confidence=0.8,
                         reason="SQS queue attributes and policy to identify producer/consumer relationships and DLQ usage",
@@ -516,7 +585,7 @@ def _collect_sqs_evidence(account_id: str, region: str) -> list[dict[str, Any]]:
 def _collect_cloudfront_evidence(account_id: str, region: str) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     try:
-        client = boto3.client("cloudfront")
+        client = _client("cloudfront")
         kwargs: dict[str, Any] = {}
         while True:
             response = client.list_distributions(**kwargs)
@@ -543,6 +612,7 @@ def _collect_cloudfront_evidence(account_id: str, region: str) -> list[dict[str,
                             "origins": cfg.get("Origins", {}).get("Items", []),
                             "viewer_certificate": cfg.get("ViewerCertificate"),
                             "tags": tags,
+                            "raw": detail,
                         },
                         confidence=0.9,
                         reason="CloudFront distribution metadata confirming public endpoint exposure and origin configuration",
@@ -570,7 +640,7 @@ def _collect_cloudfront_evidence(account_id: str, region: str) -> list[dict[str,
 def _collect_route53_evidence(account_id: str, region: str) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     try:
-        client = boto3.client("route53")
+        client = _client("route53")
         zone_kwargs: dict[str, Any] = {}
         while True:
             zones_response = client.list_hosted_zones(**zone_kwargs)
@@ -595,6 +665,7 @@ def _collect_route53_evidence(account_id: str, region: str) -> list[dict[str, An
                                     "ttl": record.get("TTL"),
                                     "resource_records": record.get("ResourceRecords", []),
                                     "alias_target": record.get("AliasTarget"),
+                                    "raw": record,
                                 },
                                 confidence=0.85,
                                 reason="Route53 hosted zone records showing public DNS routing and name ownership",
@@ -670,6 +741,7 @@ def _collect_oc_routes_evidence(account_id: str, region: str) -> list[dict[str, 
                         "to": spec.get("to"),
                         "wildcard_policy": spec.get("wildcardPolicy"),
                         "ingress": status.get("ingress", []),
+                        "raw": route,
                     },
                     confidence=0.88,
                     reason="OpenShift route metadata showing external DNS exposure and service target mapping",
@@ -691,9 +763,28 @@ def _collect_oc_routes_evidence(account_id: str, region: str) -> list[dict[str, 
     return records
 
 
+def _regional_collectors(resource_type_list: list[str]) -> dict[str, Callable[[str, str], list[dict[str, Any]]]]:
+    return {
+        "aws-config": lambda acc, reg: _collect_aws_config_evidence(acc, reg, resource_type_list),
+        "ec2-eni": lambda acc, reg: _collect_ec2_eni_evidence(acc, reg, resource_type_list),
+        "elb": lambda acc, reg: _collect_elb_evidence(acc, reg, resource_type_list),
+        "cloudtrail": _collect_cloudtrail_evidence,
+        "ssm-inventory": _collect_ssm_inventory_evidence,
+        "sqs": _collect_sqs_evidence,
+    }
+
+
+_GLOBAL_COLLECTORS: dict[str, Callable[[str, str], list[dict[str, Any]]]] = {
+    "cloudfront": _collect_cloudfront_evidence,
+    "route53": _collect_route53_evidence,
+    "oc-routes": _collect_oc_routes_evidence,
+    "terraform-state": _collect_terraform_state_evidence,
+}
+
+
 def collect_aws_evidence(
     account_id: str,
-    region: str,
+    region: str = "all",
     output_dir: str | None = None,
     source_names: list[str] | None = None,
     resource_types: list[str] | None = None,
@@ -702,56 +793,35 @@ def collect_aws_evidence(
     """Collect real AWS evidence records and persist them as JSON."""
     sources = list(source_names or DEFAULT_SOURCE_NAMES)
     resource_type_list = _iter_resource_types(resource_types)
+    regions = resolve_regions(region)
+    # Con una sola regione le sorgenti globali mantengono quella regione
+    # (compatibilita'); in multi-regione sono etichettate "global".
+    global_region = regions[0] if len(regions) == 1 else GLOBAL_REGION_LABEL
 
+    regional = _regional_collectors(resource_type_list)
     records_by_source: dict[str, list[dict[str, Any]]] = {}
-    aggregated: list[dict[str, Any]] = []
 
-    if "aws-config" in sources:
-        source_records = _collect_aws_config_evidence(account_id, region, resource_type_list)
-        records_by_source["aws-config"] = source_records
-        aggregated.extend(source_records)
-    if "ec2-eni" in sources:
-        source_records = _collect_ec2_eni_evidence(account_id, region, resource_type_list)
-        records_by_source["ec2-eni"] = source_records
-        aggregated.extend(source_records)
-    if "elb" in sources:
-        source_records = _collect_elb_evidence(account_id, region, resource_type_list)
-        records_by_source["elb"] = source_records
-        aggregated.extend(source_records)
-    if "cloudfront" in sources:
-        source_records = _collect_cloudfront_evidence(account_id, region)
-        records_by_source["cloudfront"] = source_records
-        aggregated.extend(source_records)
-    if "route53" in sources:
-        source_records = _collect_route53_evidence(account_id, region)
-        records_by_source["route53"] = source_records
-        aggregated.extend(source_records)
-    if "oc-routes" in sources:
-        source_records = _collect_oc_routes_evidence(account_id, region)
-        records_by_source["oc-routes"] = source_records
-        aggregated.extend(source_records)
-    if "cloudtrail" in sources:
-        source_records = _collect_cloudtrail_evidence(account_id, region)
-        records_by_source["cloudtrail"] = source_records
-        aggregated.extend(source_records)
-    if "terraform-state" in sources:
-        source_records = _collect_terraform_state_evidence(account_id, region)
-        records_by_source["terraform-state"] = source_records
-        aggregated.extend(source_records)
-    if "ssm-inventory" in sources:
-        source_records = _collect_ssm_inventory_evidence(account_id, region)
-        records_by_source["ssm-inventory"] = source_records
-        aggregated.extend(source_records)
-    if "sqs" in sources:
-        source_records = _collect_sqs_evidence(account_id, region)
-        records_by_source["sqs"] = source_records
-        aggregated.extend(source_records)
+    regional_sources = [name for name in sources if name in regional]
+    if regional_sources:
+        by_region: dict[str, dict[str, list[dict[str, Any]]]] = {}
 
-    for source_name in set(sources) - {"aws-config", "ec2-eni", "elb", "cloudfront", "route53", "oc-routes", "cloudtrail", "terraform-state", "ssm-inventory", "sqs"}:
-        placeholder = [
+        def _run_region(reg: str) -> None:
+            by_region[reg] = {name: regional[name](account_id, reg) for name in regional_sources}
+
+        with ThreadPoolExecutor(max_workers=min(_MAX_REGION_WORKERS, len(regions))) as pool:
+            list(pool.map(_run_region, regions))
+        for name in regional_sources:
+            records_by_source[name] = [r for reg in regions for r in by_region[reg][name]]
+
+    for name in sources:
+        if name in _GLOBAL_COLLECTORS:
+            records_by_source[name] = _GLOBAL_COLLECTORS[name](account_id, global_region)
+
+    for source_name in set(sources) - set(regional) - set(_GLOBAL_COLLECTORS):
+        records_by_source[source_name] = [
             _make_record(
                 account_id=account_id,
-                region=region,
+                region=global_region,
                 resource_type="AWS::EC2::Volume",
                 source=source_name,
                 evidence_type="not_implemented",
@@ -760,12 +830,15 @@ def collect_aws_evidence(
                 reason="Source is configured but not yet implemented in the real collection layer",
             )
         ]
-        records_by_source[source_name] = placeholder
-        aggregated.extend(placeholder)
+
+    aggregated: list[dict[str, Any]] = [
+        r for name in sources for r in records_by_source.get(name, [])
+    ]
 
     payload: dict[str, Any] = {
         "account_id": account_id,
         "region": region,
+        "regions": regions,
         "generated_at": _utc_now(),
         "sources": sources,
         "resource_types": resource_type_list,
@@ -788,6 +861,7 @@ def collect_aws_evidence(
                 {
                     "account_id": account_id,
                     "region": region,
+                    "regions": regions if source_name in regional else [global_region],
                     "source": source_name,
                     "generated_at": _utc_now(),
                     "records": source_records,
@@ -809,7 +883,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Genera un file JSON di evidenze AWS")
     parser.add_argument("--account-id", required=True)
-    parser.add_argument("--region", required=True)
+    parser.add_argument("--region", default="all", help='"all" (default), una regione o lista "a,b"')
     parser.add_argument("--output-dir", default="exports")
     parser.add_argument("--source", action="append", dest="sources", default=None)
     parser.add_argument("--resource-type", action="append", dest="resource_types", default=None)

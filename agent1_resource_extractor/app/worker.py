@@ -17,9 +17,10 @@ class WindowsWorker(SimpleWorker):
     death_penalty_class = TimerDeathPenalty
 
 
-def run_extraction(job_id: str, account_id: str, region: str) -> dict:
+def run_extraction(job_id: str, account_id: str, region: str = "all") -> dict:
     """
     Task RQ: estrae tutte le risorse per account/region e le persiste in raw_resources.
+    region: "all" (tutte le regioni abilitate), una regione o lista "a,b".
     Ritorna un summary dict.
     """
     from .aws_client import AWSClient, DEFAULT_RESOURCE_TYPES
@@ -31,4 +32,4 @@ def run_extraction(job_id: str, account_id: str, region: str) -> dict:
     count = upsert_resources(job_id, resources)
 
     logger.info("Job %s: estratte e persistite %d risorse", job_id, count)
-    return {"job_id": job_id, "resources_extracted": count}
+    return {"job_id": job_id, "resources_extracted": count, "regions": client.regions}

@@ -3,6 +3,7 @@ Agent 1 — Resource Extractor  (porta 8001)
 Endpoints:
   POST /extract/full
   POST /extract/resource-type/{resource_type}
+  POST /extract/config-inventory
   GET  /extract/status/{task_id}
   GET  /health
 """
@@ -33,20 +34,30 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 class ExtractFullRequest(BaseModel):
     job_id: str
     account_id: str
-    region: str
+    # "all" (default) = tutte le regioni abilitate; oppure "eu-south-1" o "a,b"
+    region: str = "all"
 
 
 class ExtractResourceTypeRequest(BaseModel):
     job_id: str
     account_id: str
-    region: str
+    # "all" (default) = tutte le regioni abilitate; oppure "eu-south-1" o "a,b"
+    region: str = "all"
     resource_type: Optional[str] = None
+
+
+class ExtractConfigInventoryRequest(BaseModel):
+    job_id: str
+    account_id: str
+    # "all" (default) = tutte le regioni abilitate; oppure "eu-south-1" o "a,b"
+    region: str = "all"
 
 
 class ExtractEvidenceRequest(BaseModel):
     job_id: str
     account_id: str
-    region: str
+    # "all" (default) = tutte le regioni abilitate; oppure "eu-south-1" o "a,b"
+    region: str = "all"
     output_dir: Optional[str] = None
     source_names: Optional[list[str]] = None
     resource_types: Optional[list[str]] = None
@@ -82,7 +93,7 @@ async def health():
 
 @app.post("/extract/evidence", status_code=202)
 async def extract_evidence(req: ExtractEvidenceRequest):
-    """Genera un file JSON con le evidenze AWS per account/region."""
+    """Genera un file JSON con le evidenze AWS per account/region (anche "all")."""
     from .evidence import collect_aws_evidence
 
     payload = collect_aws_evidence(
@@ -99,6 +110,7 @@ async def extract_evidence(req: ExtractEvidenceRequest):
         "status": "generated",
         "file_path": payload["file_path"],
         "records": len(payload["records"]),
+        "regions": payload.get("regions", [payload.get("region")]),
     }
 
 
@@ -145,7 +157,60 @@ async def extract_resource_type(resource_type: str, req: ExtractResourceTypeRequ
         logger.exception("Errore estrazione %s", resource_type)
         raise HTTPException(status_code=500, detail=str(exc))
 
-    return {"resource_type": resource_type, "count": len(result), "resources": result}
+    return {
+        "resource_type": resource_type,
+        "count": len(result),
+        "regions": sorted({r["region"] for r in result}),
+        "resources": result,
+    }
+
+
+@app.post("/extract/config-inventory")
+async def extract_config_inventory(req: ExtractConfigInventoryRequest):
+    """
+    Estrazione sincrona di TUTTE le risorse instanziate nell'account, partendo
+    dal servizio AWS Config (resourceType scoperti dinamicamente, non solo i
+    6 di DEFAULT_RESOURCE_TYPES). Ogni risorsa include le relazioni native di
+    Config e, in attributes["tagging_analysis"], il confronto con la CINECA
+    Tagging Strategy (tag mandatory/operativi mancanti + suggerimenti).
+    Persiste in raw_resources come le altre estrazioni.
+    """
+    import asyncio
+    from .aws_client import AWSClient
+    from .db import upsert_resources
+
+    assume_role_arn = os.environ.get("AWS_ASSUME_ROLE_ARN") or None
+
+    def _run():
+        client = AWSClient(
+            account_id=req.account_id,
+            region=req.region,
+            assume_role_arn=assume_role_arn,
+        )
+        resources = client.list_all_resources_from_config()
+        upsert_resources(req.job_id, resources)
+        return [r.model_dump() for r in resources]
+
+    try:
+        result = await asyncio.to_thread(_run)
+    except Exception as exc:
+        logger.exception("Errore estrazione config-inventory")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    by_type: dict[str, int] = {}
+    non_compliant = 0
+    for r in result:
+        by_type[r["resource_type"]] = by_type.get(r["resource_type"], 0) + 1
+        if not r["attributes"].get("tagging_analysis", {}).get("compliant", True):
+            non_compliant += 1
+
+    return {
+        "count": len(result),
+        "resource_types": by_type,
+        "non_compliant_mandatory_tags": non_compliant,
+        "regions": sorted({r["region"] for r in result}),
+        "resources": result,
+    }
 
 
 @app.get("/extract/status/{task_id}", response_model=TaskStatus)

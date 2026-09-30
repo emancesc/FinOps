@@ -1,6 +1,8 @@
 import io
 import json
 
+from moto import mock_aws
+
 from app.evidence import collect_aws_evidence
 
 
@@ -46,7 +48,7 @@ def test_collect_aws_evidence_handles_new_sources(monkeypatch, tmp_path):
             return {"HostedZones": [{"Id": "/hostedzone/Z456", "Name": "second.example.com."}], "IsTruncated": False}
 
         def list_resource_record_sets(self, **kwargs):
-            if kwargs.get("HostedZoneId") == "Z123":
+            if kwargs.get("HostedZoneId") == "Z123" and kwargs.get("StartRecordName") is None:
                 return {
                     "ResourceRecordSets": [{"Name": "example.com.", "Type": "A", "TTL": 300, "ResourceRecords": [{"Value": "1.2.3.4"}]}],
                     "IsTruncated": True,
@@ -226,6 +228,7 @@ def test_collect_aws_evidence_handles_pagination(monkeypatch, tmp_path):
     assert len([r for r in result["records"] if r["source"] == "sqs"]) >= 2
 
 
+@mock_aws
 def test_collect_aws_evidence_creates_json_file(tmp_path):
     account_id = "123456789012"
     region = "eu-south-1"
@@ -253,3 +256,51 @@ def test_collect_aws_evidence_creates_json_file(tmp_path):
     assert payload["account_id"] == account_id
     assert payload["region"] == region
     assert "aws-config" in payload["sources"]
+
+
+def test_collect_aws_evidence_multi_region(monkeypatch, tmp_path):
+    """Sorgenti regionali eseguite per ogni regione, globali una sola volta."""
+    calls: list[tuple[str, str | None]] = []
+
+    class FakeSQSClient:
+        def __init__(self, region):
+            self.region = region
+
+        def list_queues(self, **kwargs):
+            return {"QueueUrls": [f"https://sqs.{self.region}/q"]}
+
+        def get_queue_attributes(self, **kwargs):
+            return {"Attributes": {"QueueArn": f"arn:aws:sqs:{self.region}:123456789012:q", "VisibilityTimeout": "30"}}
+
+    class FakeRoute53Client:
+        def list_hosted_zones(self, **kwargs):
+            return {"HostedZones": [{"Id": "/hostedzone/Z1", "Name": "example.com."}], "IsTruncated": False}
+
+        def list_resource_record_sets(self, **kwargs):
+            return {"ResourceRecordSets": [{"Name": "example.com.", "Type": "A"}], "IsTruncated": False}
+
+    def fake_client(service_name, region_name=None):
+        calls.append((service_name, region_name))
+        if service_name == "sqs":
+            return FakeSQSClient(region_name)
+        if service_name == "route53":
+            return FakeRoute53Client()
+        raise AssertionError(f"Unexpected service: {service_name}")
+
+    monkeypatch.setattr("app.evidence.boto3.client", fake_client)
+
+    result = collect_aws_evidence(
+        account_id="123456789012",
+        region="eu-south-1,eu-west-1",
+        output_dir=str(tmp_path),
+        source_names=["sqs", "route53"],
+    )
+
+    assert result["regions"] == ["eu-south-1", "eu-west-1"]
+    sqs = [r for r in result["records"] if r["source"] == "sqs"]
+    assert {r["region"] for r in sqs} == {"eu-south-1", "eu-west-1"}
+    # Attributi completi della coda, non solo le chiavi selezionate
+    assert sqs[0]["value"]["attributes"]["VisibilityTimeout"] == "30"
+    route53 = [r for r in result["records"] if r["source"] == "route53"]
+    assert len(route53) == 1 and route53[0]["region"] == "global"
+    assert [c for c in calls if c[0] == "route53"] == [("route53", None)]

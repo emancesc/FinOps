@@ -143,11 +143,13 @@ Cuore del sistema. Espone le REST API verso i client, mantiene lo stato di ogni 
 
 ### Agent 1 — Resource Extractor (`agent1_resource_extractor/` — porta 8001)
 
-Estrae tutte le risorse AWS di un account/region e ne normalizza la rappresentazione.
+Estrae tutte le risorse AWS di un account, su tutte le regioni abilitate (default `region="all"`) o su una lista di regioni, e ne normalizza la rappresentazione.
 
 | Responsabilità | Dettaglio |
 |---|---|
-| Estrazione risorse | EC2, Volume, VPC, Subnet, SecurityGroup, S3 Bucket |
+| Estrazione risorse | EC2, Volume, VPC, Subnet, SecurityGroup, S3 Bucket (`/extract/config-inventory`: tutti i tipi registrati da AWS Config) |
+| Multi-regione | `region`: `"all"` (default, regioni da `ec2:DescribeRegions`), `"eu-south-1"` o `"eu-south-1,eu-west-1"`; regioni estratte in parallelo, risorse globali (IAM, S3) deduplicate per ARN, S3 assegnato alla regione del bucket |
+| Attributi | Chiavi normalizzate per prime (usate nel prompt di Agent 2), poi `configuration` completa di Config / oggetto `describe_*` integrale, `supplementary_configuration`, AZ, nome e data di creazione |
 | Relazioni architetturali | CONTAINS, SECURED_BY, ATTACHED_TO (inferite dai metadati) |
 | Credenziali AWS | Esclusivamente via **AssumeRole** con policy read-only |
 | Fallback | Config `select_resource_config` → fallback a `describe_*` se Config non disponibile |
@@ -501,12 +503,24 @@ Il profilo o il role usato per l'estrazione deve avere **almeno** queste action 
 
 ### Comandi AWS CLI per estrazione manuale
 
-Sostituire `<PROFILE>`, `<ACCOUNT_ID>` e `<REGION>` con i valori reali (es. `671594866096`, `eu-south-1`).
+Sostituire `<PROFILE>`, `<ACCOUNT_ID>` e `<REGION>` con i valori reali (es. `123456789012`, `eu-south-1`).
+
+> Per estrarre **tutte le regioni** in un colpo solo (oggetti completi, cartella solo per le regioni con risorse):
+> `python scripts\extract_linked_resources.py --profile <PROFILE> [--account <ACCOUNT_ID>] [--regions all]` (oppure una lista `eu-south-1,eu-west-1`; senza `--account` usa l'account del profilo).
+> Equivalente PowerShell: `.\scripts\extract_linked_resources.ps1 -AwsProfile <PROFILE> [-Account <ACCOUNT_ID>] [-Regions all]`.
+> Entrambi producono per ogni regione: `acm_inuseby.json`, `acm_inuseby_full.json`, `cloudformation_stacks.json`, `config_rules.json`,
+> `eip_associations.json`, `eni_attachments.json`, `instances_for_volumes.json`, `snapshots_volumeid.json`, `ssm_managedinstances.json`,
+> `volumes_all.json`, `volumes_live.json`, `volumes_report.json` (+ `instances_all.json`); una chiamata fallita scrive `{"error": ...}` solo nel proprio file.
+> Test offline: `pytest scripts/tests` (AWS finto, verifica Python, pwsh e Windows PowerShell 5.1).
+> Altri strumenti generici in `scripts/`: `build_volumes_report.py <cartella regione>`, `generate_extract_docx.py --account --profile [--label]`,
+> `generate_volumes_report_docx.py --account [--label] [--notes-file]`; in Agent 1 `python -m app.volume_describe --profile <PROFILE> [--volume-ids-file ids.txt]`.
+> I comandi seguenti vanno ripetuti per ciascuna regione; l'elenco si ottiene con
+> `aws ec2 describe-regions --profile $PROFILE --query "Regions[].RegionName" --output text`.
 
 ```powershell
-$PROFILE = "cineca-readonly"
+$PROFILE = "<PROFILE>"
 $REGION  = "eu-south-1"
-$ACCOUNT = "671594866096"
+$ACCOUNT = "<ACCOUNT_ID>"
 $OUT     = ".\extracted\$ACCOUNT\$REGION"
 New-Item -ItemType Directory -Force $OUT | Out-Null
 ```
@@ -651,7 +665,7 @@ from app.db import upsert_resources
 from app.normalizer import normalize_ec2, normalize_volume, normalize_eni  # adattare per tipo
 
 JOB_ID = "<JOB_ID>"          # UUID del job già creato via POST /jobs
-BASE    = r".\extracted\671594866096\eu-south-1"
+BASE    = r".\extracted\<ACCOUNT_ID>\eu-south-1"
 
 # Istanze EC2
 with open(f"{BASE}/ec2_instances.json") as f:
@@ -696,7 +710,7 @@ curl -X POST http://localhost:8000/jobs/<JOB_ID>/advance
 
 ---
 
-### File minimi richiesti per l'analisi IDM (account `671594866096`, region `eu-south-1`)
+### File minimi richiesti per l'analisi di un account (per ciascuna regione estratta)
 
 | File | Comando | Contenuto chiave |
 |------|---------|-----------------|
@@ -710,7 +724,7 @@ curl -X POST http://localhost:8000/jobs/<JOB_ID>/advance
 | `vpcs.json` | `describe-vpcs` | `VpcId`, `CidrBlock`, `Tags` |
 | `subnets.json` | `describe-subnets` | `SubnetId`, `AvailabilityZone`, `VpcId` |
 
-> **Nota**: le descrizioni ENI (es. `"IDM-Frontend idp5fe-aws-05 reserved IP"`, `"LDAP ldap-aws-36 reserved IP"`) sono la fonte primaria per identificare servizio e tier di ogni istanza. Assicurarsi di includere sempre `eni_attachments.json` nell'import.
+> **Nota**: le descrizioni ENI (es. `"Frontend web-01 reserved IP"`, `"LDAP ldap-02 reserved IP"`) sono la fonte primaria per identificare servizio e tier di ogni istanza. Assicurarsi di includere sempre `eni_attachments.json` nell'import.
 
 ---
 
