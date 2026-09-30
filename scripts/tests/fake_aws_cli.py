@@ -21,6 +21,14 @@ for i, a in enumerate(args):
         continue
     clean.append(a)
 
+# FAKE_AWS_LOG: file dove registrare le chiamate; FAKE_AWS_FAIL: "servizio operazione" da far fallire
+if os.environ.get("FAKE_AWS_LOG"):
+    with open(os.environ["FAKE_AWS_LOG"], "a", encoding="utf-8") as f:
+        f.write(json.dumps([region, *clean]) + "\n")
+if os.environ.get("FAKE_AWS_FAIL") == " ".join(clean[:2]):
+    print("An error occurred (Throttling)", file=sys.stderr)
+    sys.exit(254)
+
 try:
     print(json.dumps(fake_aws(region, *clean)))
 except RuntimeError as exc:

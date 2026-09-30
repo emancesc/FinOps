@@ -511,7 +511,17 @@ Sostituire `<PROFILE>`, `<ACCOUNT_ID>` e `<REGION>` con i valori reali (es. `123
 > Entrambi producono per ogni regione: `acm_inuseby.json`, `acm_inuseby_full.json`, `cloudformation_stacks.json`, `config_rules.json`,
 > `eip_associations.json`, `eni_attachments.json`, `instances_for_volumes.json`, `snapshots_volumeid.json`, `ssm_managedinstances.json`,
 > `volumes_all.json`, `volumes_live.json`, `volumes_report.json` (+ `instances_all.json`); una chiamata fallita scrive `{"error": ...}` solo nel proprio file.
-> Test offline: `pytest scripts/tests` (AWS finto, verifica Python, pwsh e Windows PowerShell 5.1).
+> **Persistenza e ripresa**: ogni sezione viene salvata su disco appena completata (scrittura atomica, stato in `<regione>/_state.json`);
+> nei cicli lunghi (certificati ACM, stack, regole Config, tag SSM) ogni elemento viene accodato a `_<sezione>.partial.jsonl`.
+> Dopo un'interruzione basta rilanciare lo stesso comando: le parti completate vengono rilette da disco e ritentate solo quelle mancanti
+> o in errore (`--fresh` / `-Fresh` per ripartire da zero). La versione Python esegue 4 chiamate per-elemento in parallelo.
+> I **dinieghi permanenti** (SCP dell'organizzazione `explicit deny`, `UnauthorizedOperation`, `AccessDenied`) sono salvati come
+> `{"error": ..., "denied": true}` e non vengono ritentati (stato regione `denied` / `done_with_denied`); dopo un cambio di permessi
+> usare `--retry-denied` / `-RetryDenied`. Throttling e altri errori transitori restano `error` e vengono ritentati.
+> **Avanzamento**: percentuale pesata sul lavoro reale (ogni sezione e ogni elemento dei cicli lunghi vale un'unità),
+> una riga per sezione (`[ 42.5%] (85/200) eu-south-1 acm done 820 items`),
+> contatori nei cicli lunghi e stato leggibile in ogni momento in `extracted/<account>/_run.json` (`progress_pct`, stato per regione).
+> Test offline: `pytest scripts/tests` (AWS finto, verifica Python, pwsh e Windows PowerShell 5.1, incluse interruzione e ripresa).
 > Altri strumenti generici in `scripts/`: `build_volumes_report.py <cartella regione>`, `generate_extract_docx.py --account --profile [--label]`,
 > `generate_volumes_report_docx.py --account [--label] [--notes-file]`; in Agent 1 `python -m app.volume_describe --profile <PROFILE> [--volume-ids-file ids.txt]`.
 > I comandi seguenti vanno ripetuti per ciascuna regione; l'elenco si ottiene con
