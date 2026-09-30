@@ -513,8 +513,10 @@ Sostituire `<PROFILE>`, `<ACCOUNT_ID>` e `<REGION>` con i valori reali (es. `123
 > `volumes_all.json`, `volumes_live.json`, `volumes_report.json` (+ `instances_all.json`); una chiamata fallita scrive `{"error": ...}` solo nel proprio file.
 > **Persistenza e ripresa**: ogni sezione viene salvata su disco appena completata (scrittura atomica, stato in `<regione>/_state.json`);
 > nei cicli lunghi (certificati ACM, stack, regole Config, tag SSM) ogni elemento viene accodato a `_<sezione>.partial.jsonl`.
-> Dopo un'interruzione basta rilanciare lo stesso comando: le parti completate vengono rilette da disco e ritentate solo quelle mancanti
-> o in errore (`--fresh` / `-Fresh` per ripartire da zero). La versione Python esegue 4 chiamate per-elemento in parallelo.
+> **Ogni esecuzione interroga AWS**: se l'esecuzione precedente è completata, un nuovo lancio estrae tutto da capo.
+> I dati salvati vengono riusati **solo per riprendere un'esecuzione interrotta**: rilanciando lo stesso comando le parti completate
+> vengono rilette da disco e ritentate solo quelle mancanti o in errore (`--resume` / `-Resume` per forzare la ripresa,
+> `--fresh` / `-Fresh` per forzare l'estrazione completa). La versione Python esegue 4 chiamate per-elemento in parallelo.
 > I **dinieghi permanenti** (SCP dell'organizzazione `explicit deny`, `UnauthorizedOperation`, `AccessDenied`) sono salvati come
 > `{"error": ..., "denied": true}` e non vengono ritentati (stato regione `denied` / `done_with_denied`); dopo un cambio di permessi
 > usare `--retry-denied` / `-RetryDenied`. Throttling e altri errori transitori restano `error` e vengono ritentati.
@@ -522,6 +524,19 @@ Sostituire `<PROFILE>`, `<ACCOUNT_ID>` e `<REGION>` con i valori reali (es. `123
 > una riga per sezione (`[ 42.5%] (85/200) eu-south-1 acm done 820 items`),
 > contatori nei cicli lunghi e stato leggibile in ogni momento in `extracted/<account>/_run.json` (`progress_pct`, stato per regione).
 > Test offline: `pytest scripts/tests` (AWS finto, verifica Python, pwsh e Windows PowerShell 5.1, incluse interruzione e ripresa).
+> Dipendenze degli script: `python -m pip install -r scripts/requirements.txt`.
+>
+> **Export Resource Explorer (un xlsx per tenant)**: `python scripts\export_resource_explorer_xlsx.py --profile <PROFILE> [--tenant <nome>] [--regions all]`
+> chiama le API di AWS Resource Explorer (`list-resources`, indice locale di ogni regione indicizzata) e produce
+> `extracted/<account>/resource_explorer_<tenant>.xlsx` con i fogli **Resources** (una riga per risorsa: `ExtractionRegion`,
+> `Region`, servizio, tipo, ARN, Name, date, conformità ai tag obbligatori `cineca:`, una colonna per ogni tag `cineca:*`
+> nell'ordine della strategy e per ogni altro tag, tag e proprietà in JSON), **Summary** (copertura dei tag `cineca:`,
+> conteggi per regione e tipo) e **Regions** (stato per regione: done / denied / error / no_index). Stesse regole di
+> persistenza pagina per pagina, ripresa, avanzamento e gestione dei dinieghi dell'estrattore.
+>
+> **Frontend**: la pagina **Inventario** (`frontend/inventory.html`) lancia `POST /extract/config-inventory` sul job selezionato
+> (tutte le regioni del job o una lista) e mostra riepilogo, conteggi per regione e tabella filtrabile per regione, tipo,
+> testo e non conformità ai tag obbligatori, con dettaglio JSON della risorsa ed export CSV.
 > Altri strumenti generici in `scripts/`: `build_volumes_report.py <cartella regione>`, `generate_extract_docx.py --account --profile [--label]`,
 > `generate_volumes_report_docx.py --account [--label] [--notes-file]`; in Agent 1 `python -m app.volume_describe --profile <PROFILE> [--volume-ids-file ids.txt]`.
 > I comandi seguenti vanno ripetuti per ciascuna regione; l'elenco si ottiene con

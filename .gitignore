@@ -34,3 +34,6 @@ htmlcov/
 
 # Export reali delle evidenze AWS (dati di account): non versionare
 agent1_resource_extractor/exports/*.json
+
+# Documenti caricati dall interfaccia (strategy, design, assessment)
+uploads/

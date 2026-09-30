@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>FinOps Tagging Platform — Setup Account</title>
+  <link rel="icon" href="data:," />
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
@@ -11,6 +12,8 @@
     <a class="brand" href="index.html">FinOps Tagging</a>
     <a href="index.html" class="active">Setup Account</a>
     <a href="dashboard.html">Dashboard</a>
+    <a href="inventory.html">Inventario</a>
+    <a href="proposals.html">Proposta Tagging</a>
     <a href="review.html">Revisione Tag</a>
     <a href="rules.html">Regole</a>
     <a href="graph.html">Grafo</a>
@@ -18,24 +21,84 @@
   <main>
     <h1>Setup Account AWS</h1>
     <div class="card">
-      <h2>Crea nuovo job di analisi</h2>
+      <div class="card-head">
+        <h2>Crea nuovo job di analisi</h2>
+        <button type="button" class="btn btn-secondary info-toggle" data-target="info-all" aria-expanded="false">ⓘ Come recuperare i dati</button>
+      </div>
+      <div class="info-box" id="info-all" hidden>
+        <p><strong>Prima di iniziare</strong>: serve un accesso in sola lettura all'account AWS, di solito tramite il portale
+          AWS SSO (IAM Identity Center). Da terminale: <code>aws sso login --profile &lt;profilo&gt;</code>.</p>
+        <ol>
+          <li><strong>Account ID</strong>: 12 cifre, si legge in alto a destra nella console AWS o con
+            <code>aws sts get-caller-identity --profile &lt;profilo&gt; --query Account --output text</code>.</li>
+          <li><strong>Regioni</strong>: lascia <code>all</code> per analizzare tutte le regioni abilitate.</li>
+          <li><strong>Tenant ID</strong>: non è un dato AWS, è un nome scelto da voi per raggruppare i job dello stesso cliente
+            (es. <code>application</code>, <code>mur</code>, <code>idm</code>).</li>
+          <li><strong>Role ARN</strong>: facoltativo, vedi il pulsante ⓘ accanto al campo.</li>
+        </ol>
+        <p>Usa i pulsanti ⓘ accanto a ogni campo per i dettagli.</p>
+      </div>
       <form id="form-create-job">
         <div class="form-group">
-          <label for="account_id">Account ID AWS</label>
-          <input type="text" id="account_id" placeholder="123456789012" required />
+          <label for="account_id">Account ID AWS
+            <button type="button" class="info-btn info-toggle" data-target="info-account" aria-expanded="false" title="Come recuperarlo">ⓘ</button></label>
+          <input type="text" id="account_id" placeholder="123456789012" required pattern="\d{12}" title="12 cifre" />
+          <div class="info-box" id="info-account" hidden>
+            <p>Il numero di 12 cifre che identifica l'account AWS da analizzare. Per trovarlo:</p>
+            <ul>
+              <li><strong>Portale AWS SSO</strong> (IAM Identity Center): è indicato sotto il nome di ogni account nell'elenco.</li>
+              <li><strong>Console AWS</strong>: clic sul nome utente in alto a destra, voce <em>Account ID</em>.</li>
+              <li><strong>AWS CLI</strong>, dopo <code>aws sso login --profile &lt;profilo&gt;</code>:
+                <code>aws sts get-caller-identity --profile &lt;profilo&gt; --query Account --output text</code></li>
+              <li>Nel file <code>%USERPROFILE%\.aws\config</code>: valore <code>sso_account_id</code> del profilo.</li>
+            </ul>
+          </div>
         </div>
         <div class="form-group">
-          <label for="region">Regioni AWS</label>
+          <label for="region">Regioni AWS
+            <button type="button" class="info-btn info-toggle" data-target="info-region" aria-expanded="false" title="Quali regioni indicare">ⓘ</button></label>
           <input type="text" id="region" value="all" placeholder="all oppure eu-south-1,eu-west-1" />
           <small>"all" = tutte le regioni abilitate sull'account; oppure una o piu' regioni separate da virgola.</small>
+          <div class="info-box" id="info-region" hidden>
+            <p>Consigliato: <code>all</code>. L'estrazione interroga tutte le regioni abilitate sull'account; quelle bloccate
+              dalle policy dell'organizzazione (SCP) vengono segnalate come negate e saltate.</p>
+            <p>Per limitare l'analisi, indica una o più regioni separate da virgola, es. <code>eu-south-1,us-east-1</code>
+              (<code>us-east-1</code> contiene anche i certificati ACM usati da CloudFront). Elenco delle regioni abilitate:
+              <code>aws ec2 describe-regions --profile &lt;profilo&gt; --query "Regions[].RegionName" --output text</code></p>
+          </div>
         </div>
         <div class="form-group">
-          <label for="tenant_id">Tenant ID</label>
-          <input type="text" id="tenant_id" placeholder="cliente-acme" required />
+          <label for="tenant_id">Tenant ID
+            <button type="button" class="info-btn info-toggle" data-target="info-tenant" aria-expanded="false" title="Cos'è il Tenant ID">ⓘ</button></label>
+          <input type="text" id="tenant_id" placeholder="es. application" required />
+          <div class="info-box" id="info-tenant" hidden>
+            <p><strong>Non è un dato AWS e non va recuperato da nessuna parte</strong>: è un identificativo scelto da voi per il
+              cliente o il perimetro a cui appartiene l'account (es. <code>application</code>, <code>mur</code>,
+              <code>idm</code>, <code>cineca</code>).</p>
+            <p>A cosa serve: le regole di tagging approvate (pagina <em>Regole</em>) e il nodo <em>Tenant</em> del grafo sono
+              associati al tenant. Usa sempre lo stesso valore per tutti gli account e job dello stesso cliente, così le
+              regole già approvate vengono riutilizzate. Consigliato: minuscolo, senza spazi.</p>
+          </div>
         </div>
         <div class="form-group">
-          <label for="role_arn">Role ARN (AssumeRole)</label>
-          <input type="text" id="role_arn" placeholder="arn:aws:iam::123456789012:role/FinOpsReadOnly" required />
+          <label for="role_arn">Role ARN (AssumeRole) — facoltativo
+            <button type="button" class="info-btn info-toggle" data-target="info-role" aria-expanded="false" title="Come recuperarlo">ⓘ</button></label>
+          <input type="text" id="role_arn" placeholder="arn:aws:iam::123456789012:role/FinOpsReadOnly" />
+          <div class="info-box" id="info-role" hidden>
+            <p><strong>Nota</strong>: oggi questo valore <em>non viene usato</em> dall'estrazione. Agent 1 usa le credenziali
+              del proprio ambiente: il profilo SSO (<code>AWS_PROFILE</code>) oppure il ruolo indicato in
+              <code>AWS_ASSUME_ROLE_ARN</code> nel file <code>.env</code>. Puoi lasciare il campo vuoto.</p>
+            <p>Se serve l'ARN del ruolo di sola lettura (per configurare <code>AWS_ASSUME_ROLE_ARN</code>):</p>
+            <ul>
+              <li><strong>Console IAM</strong> dell'account: <em>Ruoli</em>, cerca il ruolo di lettura (es.
+                <code>FinOps_ReadOnly</code>), copia il campo <em>ARN</em>.</li>
+              <li><strong>AWS CLI</strong>:
+                <code>aws iam list-roles --profile &lt;profilo&gt; --query "Roles[?contains(RoleName,'ReadOnly')].Arn" --output text</code></li>
+              <li>Con SSO il ruolo si chiama <code>AWSReservedSSO_&lt;PermissionSet&gt;_…</code>; il ruolo attuale è indicato da
+                <code>aws sts get-caller-identity --profile &lt;profilo&gt;</code> (campo <em>Arn</em>).</li>
+              <li>Formato: <code>arn:aws:iam::&lt;account-id&gt;:role/&lt;nome-ruolo&gt;</code>.</li>
+            </ul>
+          </div>
         </div>
         <button type="submit" class="btn btn-primary">Crea Job</button>
       </form>
@@ -48,13 +111,21 @@
   </main>
   <script src="js/api.js"></script>
   <script>
+    // Pulsanti info: mostrano/nascondono le istruzioni per recuperare i dati richiesti
+    document.querySelectorAll(".info-toggle").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const box = document.getElementById(btn.dataset.target);
+        box.hidden = !box.hidden;
+        btn.setAttribute("aria-expanded", String(!box.hidden));
+      });
+    });
     document.getElementById("form-create-job").addEventListener("submit", async (e) => {
       e.preventDefault();
       const payload = {
         account_id: document.getElementById("account_id").value,
         region: document.getElementById("region").value.trim() || "all",
         tenant_id: document.getElementById("tenant_id").value,
-        role_arn: document.getElementById("role_arn").value,
+        role_arn: document.getElementById("role_arn").value.trim() || null,
       };
       try {
         const job = await api.createJob(payload);

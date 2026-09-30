@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinOps — Inventario</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <nav>
+    <a class="brand" href="index.html">FinOps Tagging</a>
+    <a href="index.html">Setup Account</a>
+    <a href="dashboard.html">Dashboard</a>
+    <a href="inventory.html" class="active">Inventario</a>
+    <a href="proposals.html">Proposta Tagging</a>
+    <a href="review.html">Revisione Tag</a>
+    <a href="rules.html">Regole</a>
+    <a href="graph.html">Grafo</a>
+  </nav>
+  <main>
+    <h1>Inventario risorse (AWS Config, multi-regione)</h1>
+
+    <div class="card">
+      <h2>Estrazione</h2>
+      <p class="muted">Estrae tutte le risorse registrate da AWS Config nelle regioni del job (o in quelle indicate),
+        con relazioni e confronto con la CINECA Tagging Strategy. Le risorse vengono salvate nel job selezionato.</p>
+      <form id="form-inventory" class="form-row">
+        <div class="form-group">
+          <label for="job-select">Job</label>
+          <select id="job-select" required></select>
+        </div>
+        <div class="form-group">
+          <label for="inv-region">Regioni</label>
+          <input type="text" id="inv-region" placeholder="all oppure eu-south-1,eu-west-1" />
+          <small>Vuoto = regioni del job.</small>
+        </div>
+        <button type="submit" class="btn btn-primary" id="btn-extract">Estrai inventario</button>
+      </form>
+      <p id="inv-status" class="muted" style="margin-top:0.75rem"></p>
+    </div>
+
+    <div class="card" id="inv-summary" style="display:none">
+      <h2>Riepilogo</h2>
+      <div class="stats" id="stats"></div>
+      <div id="region-counts" class="chips"></div>
+    </div>
+
+    <div class="card" id="inv-results" style="display:none">
+      <h2>Risorse</h2>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="f-region">Regione</label>
+          <select id="f-region"><option value="">Tutte</option></select>
+        </div>
+        <div class="form-group">
+          <label for="f-type">Tipo risorsa</label>
+          <select id="f-type"><option value="">Tutti</option></select>
+        </div>
+        <div class="form-group">
+          <label for="f-text">Cerca (ARN, Name, tag)</label>
+          <input type="text" id="f-text" placeholder="es. web, UNIBO, vol-..." />
+        </div>
+        <div class="form-group">
+          <label><input type="checkbox" id="f-noncompliant" /> Solo non conformi (tag obbligatori)</label>
+        </div>
+        <button type="button" class="btn btn-secondary" id="btn-csv">Scarica CSV</button>
+      </div>
+      <p class="muted" id="shown-count"></p>
+      <div class="table-wrap">
+        <table id="inv-table">
+          <thead>
+            <tr>
+              <th>Regione</th><th>Tipo</th><th>Risorsa</th><th>Name</th>
+              <th>Conforme</th><th>Tag obbligatori mancanti</th><th>Suggerimenti</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" id="res-detail" style="display:none">
+      <h2>Dettaglio risorsa</h2>
+      <pre id="res-detail-content" class="json-view"></pre>
+    </div>
+  </main>
+  <script src="js/api.js"></script>
+  <script src="js/inventory.js"></script>
+</body>
+</html>

@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>FinOps — Revisione Tag</title>
+  <link rel="icon" href="data:," />
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
@@ -11,6 +12,8 @@
     <a class="brand" href="index.html">FinOps Tagging</a>
     <a href="index.html">Setup Account</a>
     <a href="dashboard.html">Dashboard</a>
+    <a href="inventory.html">Inventario</a>
+    <a href="proposals.html">Proposta Tagging</a>
     <a href="review.html" class="active">Revisione Tag</a>
     <a href="rules.html">Regole</a>
     <a href="graph.html">Grafo</a>
@@ -18,66 +21,108 @@
   <main>
     <h1>Revisione Proposte di Tag</h1>
     <div class="card">
-      <table id="proposals-table">
-        <thead>
-          <tr>
-            <th>Risorsa</th>
-            <th>Tag Key</th>
-            <th>Valore Proposto</th>
-            <th>Confidenza</th>
-            <th>Fonte</th>
-            <th>Stato</th>
-            <th>Azioni</th>
-          </tr>
-        </thead>
-        <tbody id="proposals-body">
-          <tr><td colspan="7" style="text-align:center; color:#6b7280;">Caricamento…</td></tr>
-        </tbody>
-      </table>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="f-status">Stato</label>
+          <select id="f-status">
+            <option value="">Tutti</option><option value="pending">Da rivedere</option><option value="approved">Approvate</option>
+            <option value="edited">Modificate</option><option value="rejected">Rifiutate</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="f-tag">Tag</label>
+          <select id="f-tag"><option value="">Tutti</option></select>
+        </div>
+        <div class="form-group">
+          <label for="f-text">Cerca (risorsa, valore, motivazione)</label>
+          <input type="text" id="f-text" placeholder="es. vol-, UNIBO, Oracle" />
+        </div>
+        <div class="form-group">
+          <label><input type="checkbox" id="f-invalid" /> Solo valori non ammessi</label>
+        </div>
+      </div>
+      <p class="muted" id="count"></p>
+      <div class="table-wrap">
+        <table id="proposals-table" class="compact">
+          <thead>
+            <tr><th>Risorsa</th><th>Tag</th><th>Attuale</th><th>Proposto</th><th>Conf.</th><th>Fonte</th><th>Motivazione</th><th>Stato</th><th></th></tr>
+          </thead>
+          <tbody id="proposals-body">
+            <tr><td colspan="9" style="text-align:center; color:#6b7280;">Caricamento…</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </main>
   <script src="js/api.js"></script>
   <script>
     const params = new URLSearchParams(location.search);
     const jobId = params.get("job_id") || localStorage.getItem("last_job_id");
+    const runId = params.get("run_id");
+    const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    let proposals = [];
 
     function badgeHtml(status) {
       const cls = { pending: "badge-pending", approved: "badge-approved", rejected: "badge-rejected", edited: "badge-proposed" }[status] || "";
-      return `<span class="badge ${cls}">${status}</span>`;
+      return `<span class="badge ${cls}">${esc(status)}</span>`;
+    }
+
+    function render() {
+      const status = document.getElementById("f-status").value;
+      const tag = document.getElementById("f-tag").value;
+      const text = document.getElementById("f-text").value.trim().toLowerCase();
+      const onlyInvalid = document.getElementById("f-invalid").checked;
+      const rows = proposals.filter((p) => (!status || p.review_status === status) && (!tag || p.tag_key === tag)
+        && (!onlyInvalid || (p.reasoning || "").startsWith("[VALORE NON AMMESSO"))
+        && (!text || [p.resource_id, p.tag_value, p.reasoning].join(" ").toLowerCase().includes(text)));
+      document.getElementById("count").textContent = `${rows.length} proposte` + (rows.length > 1000 ? " (mostrate le prime 1000)" : "")
+        + (runId ? " — esecuzione selezionata" : "");
+      const tbody = document.getElementById("proposals-body");
+      if (!rows.length) { tbody.innerHTML = "<tr><td colspan='9' style='text-align:center'>Nessuna proposta.</td></tr>"; return; }
+      tbody.innerHTML = rows.slice(0, 1000).map((p) => `
+        <tr>
+          <td title="${esc(p.resource_id)}"><div>${esc(p.resource_id.split(":").slice(5).join(":") || p.resource_id)}</div>
+            <div class="muted">${esc(p.resource_type)} — ${esc(p.region)}</div></td>
+          <td>${esc(p.tag_key)}</td>
+          <td class="muted">${esc(p.current_value ?? "—")}</td>
+          <td><strong>${esc(p.tag_value ?? "—")}</strong></td>
+          <td>${p.confidence != null ? Math.round(p.confidence * 100) + "%" : "—"}</td>
+          <td class="muted" title="${esc(p.source_ref || "")}">${esc(p.source_type)}${p.source_ref ? "<br>" + esc(p.source_ref) : ""}</td>
+          <td class="muted" style="max-width:360px">${esc(p.reasoning || "")}</td>
+          <td>${badgeHtml(p.review_status)}</td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-success btn-sm" onclick="review('${p.id}','approved')" title="Approva">✓</button>
+            <button class="btn btn-secondary btn-sm" onclick="editValue('${p.id}')" title="Modifica valore">✎</button>
+            <button class="btn btn-danger btn-sm" onclick="review('${p.id}','rejected')" title="Rifiuta">✗</button>
+          </td>
+        </tr>`).join("");
     }
 
     async function loadProposals() {
-      if (!jobId) { document.getElementById("proposals-body").innerHTML = "<tr><td colspan='7'>Nessun job selezionato.</td></tr>"; return; }
+      if (!jobId) { document.getElementById("proposals-body").innerHTML = "<tr><td colspan='9'>Nessun job selezionato.</td></tr>"; return; }
       try {
-        const proposals = await api.listProposals(jobId);
-        const tbody = document.getElementById("proposals-body");
-        if (!proposals.length) { tbody.innerHTML = "<tr><td colspan='7' style='text-align:center'>Nessuna proposta.</td></tr>"; return; }
-        tbody.innerHTML = proposals.map(p => `
-          <tr>
-            <td style="font-size:0.75rem; word-break:break-all">${p.resource_id}</td>
-            <td>${p.tag_key}</td>
-            <td>${p.tag_value ?? "—"}</td>
-            <td>${p.confidence != null ? Math.round(p.confidence * 100) + "%" : "—"}</td>
-            <td style="font-size:0.75rem">${p.source_ref || p.source_type}</td>
-            <td>${badgeHtml(p.review_status)}</td>
-            <td>
-              <button class="btn btn-success" style="margin-right:4px;padding:0.25rem 0.6rem;font-size:0.8rem" onclick="review('${p.id}','approved')">✓</button>
-              <button class="btn btn-danger" style="padding:0.25rem 0.6rem;font-size:0.8rem" onclick="review('${p.id}','rejected')">✗</button>
-            </td>
-          </tr>
-        `).join("");
+        proposals = await api.listProposals(jobId, runId ? { run_id: runId } : {});
+        const tags = [...new Set(proposals.map((p) => p.tag_key))].sort();
+        document.getElementById("f-tag").innerHTML = '<option value="">Tutti</option>' + tags.map((t) => `<option>${esc(t)}</option>`).join("");
+        render();
       } catch (err) {
-        document.getElementById("proposals-body").innerHTML = `<tr><td colspan='7'>Errore: ${err.message}</td></tr>`;
+        document.getElementById("proposals-body").innerHTML = `<tr><td colspan='9'>Errore: ${esc(err.message)}</td></tr>`;
       }
     }
 
     async function review(id, status) {
-      try {
-        await api.reviewProposal(id, { review_status: status });
-        loadProposals();
-      } catch (err) { alert("Errore: " + err.message); }
+      try { await api.reviewProposal(id, { review_status: status }); await loadProposals(); } catch (err) { alert("Errore: " + err.message); }
     }
 
+    async function editValue(id) {
+      const p = proposals.find((x) => x.id === id);
+      const value = prompt(`Nuovo valore per ${p.tag_key}`, p.tag_value || "");
+      if (value === null) return;
+      try { await api.reviewProposal(id, { tag_value: value }); await loadProposals(); } catch (err) { alert("Errore: " + err.message); }
+    }
+
+    ["f-status", "f-tag", "f-invalid"].forEach((id) => document.getElementById(id).addEventListener("change", render));
+    document.getElementById("f-text").addEventListener("input", render);
     loadProposals();
   </script>
 </body>

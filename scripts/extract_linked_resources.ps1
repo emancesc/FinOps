@@ -8,7 +8,8 @@ Uso:
 
   -Account : default = account del profilo (sts get-caller-identity)
   -Regions : "all" (default) = tutte le regioni abilitate, oppure "eu-south-1,eu-west-1"
-  -Fresh   : ignora lo stato salvato ed estrae tutto da capo
+  -Fresh   : estrae sempre tutto da capo da AWS
+  -Resume  : riusa le sezioni salvate anche se il run precedente era completato
   -RetryDenied : ritenta anche sezioni/regioni negate da SCP/IAM (es. dopo un cambio permessi)
 Output: <OutRoot>\<account>\<regione>\*.json, mantenuto solo per le regioni con risorse:
   acm_inuseby.json, acm_inuseby_full.json, cloudformation_stacks.json, config_rules.json,
@@ -17,6 +18,9 @@ Output: <OutRoot>\<account>\<regione>\*.json, mantenuto solo per le regioni con 
   volumes_live.json, volumes_report.json (+ instances_all.json).
 
 Robustezza / ripresa:
+- ogni run interroga AWS: se il run precedente era completato, un nuovo run estrae tutto
+  da capo. Le sezioni salvate vengono riusate SOLO per riprendere un run interrotto
+  (o esplicitamente con -Resume).
 - ogni sezione viene scritta su disco appena completata (scrittura atomica), con lo
   stato in <regione>\_state.json; l'avanzamento dell'account e' in <account>\_run.json.
   Rilanciando lo stesso comando dopo un'interruzione, le sezioni completate vengono
@@ -38,6 +42,7 @@ param(
     [string]$Regions = "all",
     [string]$OutRoot = (Join-Path (Split-Path $PSScriptRoot -Parent) "extracted"),
     [switch]$Fresh,
+    [switch]$Resume,
     [switch]$RetryDenied
 )
 
@@ -389,8 +394,13 @@ if ($Regions -eq "all") {
 $script:AccountDir = Join-Path $OutRoot $Account
 New-Item -ItemType Directory -Force $script:AccountDir | Out-Null
 $script:RunPath = Join-Path $script:AccountDir "_run.json"
-if ($Fresh -and (Test-Path -LiteralPath $script:RunPath)) { Remove-Item -LiteralPath $script:RunPath -Force }
+# Run precedente completato -> nuova estrazione completa da AWS; run interrotto -> ripresa
 $prevRun = Read-Json $script:RunPath
+if (-not $Fresh -and -not $Resume -and $prevRun -and $prevRun.finished_at) { $Fresh = [switch]$true }
+if ($Fresh) {
+    if (Test-Path -LiteralPath $script:RunPath) { Remove-Item -LiteralPath $script:RunPath -Force }
+    $prevRun = $null
+}
 
 # Regioni gia' concluse in un run precedente: non vengono rieseguite
 $final = if ($RetryDenied) { @("done", "empty") } else { @("done", "empty", "denied", "done_with_denied") }
@@ -405,6 +415,7 @@ Save-Run
 Write-Output "Account ${Account}: $($RegionList.Count) regions, $($Sections.Count) sections each -> $($RegionList -join ', ')"
 if ($finished.Count) { Write-Output "Resume: $($finished.Count) regions already completed ($($finished -join ', '))" }
 Write-Output "Progress file: $script:RunPath"
+Write-Output ("Mode: " + $(if ($Fresh) { "full extraction from AWS" } else { "resume of an interrupted run (saved sections are reused)" }))
 
 $summary = @()
 foreach ($Region in $RegionList) {

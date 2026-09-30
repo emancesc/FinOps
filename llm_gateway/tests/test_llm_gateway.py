@@ -240,3 +240,24 @@ def test_factory_invalid_provider():
     with patch.dict("os.environ", {"LLM_PROVIDER": "gemini"}):
         with pytest.raises(ValueError, match="non supportato"):
             get_llm_client()
+
+
+def test_claude_workspace_header(monkeypatch):
+    """ANTHROPIC_WORKSPACE_ID -> header anthropic-workspace-id su ogni richiesta."""
+    from llm_gateway.claude_client import ClaudeClient
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_test123")
+    client = ClaudeClient()
+    assert client._client.default_headers.get("anthropic-workspace-id") == "wrkspc_test123"
+
+    monkeypatch.delenv("ANTHROPIC_WORKSPACE_ID")
+    assert "anthropic-workspace-id" not in ClaudeClient()._client.default_headers
+
+
+def test_claude_placeholder_key_rejected(monkeypatch):
+    from llm_gateway.claude_client import ClaudeClient
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "   # ← inserire la chiave")
+    with pytest.raises(RuntimeError, match="segnaposto"):
+        ClaudeClient()

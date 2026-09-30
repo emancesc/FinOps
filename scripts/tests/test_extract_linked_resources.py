@@ -137,10 +137,14 @@ def test_python_crash_persists_and_resumes(mod, tmp_path, monkeypatch):
     assert _load(eu / "volumes_report.json")[0]["VolumeId"] in {"vol-1", "vol-2"}
     assert _load(tmp_path / ACCOUNT / "_run.json")["regions"]["eu-south-1"] == "done"
 
-    # Terzo run: regione gia' conclusa, nessuna chiamata AWS per la regione
+    # Terzo run con --resume: regione gia' conclusa, nessuna chiamata AWS
     calls.clear()
-    mod.main(argv)
+    mod.main(argv + ["--resume"])
     assert calls == []
+
+    # Quarto run senza opzioni: il run precedente e' completato -> nuova estrazione completa da AWS
+    mod.main(argv)
+    assert ("acm", "list-certificates") in calls and ("ec2", "describe-volumes") in calls
 
 
 def test_python_crash_inside_item_loop_resumes_items(mod, tmp_path, monkeypatch):
@@ -192,10 +196,10 @@ def test_python_denied_is_not_retried(mod, tmp_path, monkeypatch):
 
     calls = []
     monkeypatch.setattr(mod, "aws_json", _recording(calls))
-    mod.main(argv)
-    assert calls == []  # regione conclusa (con dinieghi): nessuna chiamata
+    mod.main(argv + ["--resume"])
+    assert calls == []  # ripresa: regione conclusa (con dinieghi), nessuna chiamata
 
-    mod.main(argv + ["--retry-denied"])
+    mod.main(argv + ["--resume", "--retry-denied"])
     assert ("us-east-1", "ssm", "describe-instance-information") in calls
     assert ("us-east-1", "acm", "list-certificates") not in calls  # le sezioni "done" restano da disco
 
@@ -216,7 +220,7 @@ def test_python_region_fully_denied(mod, tmp_path, monkeypatch):
 
     calls = []
     monkeypatch.setattr(mod, "aws_json", _recording(calls, scp))
-    mod.main(argv)
+    mod.main(argv + ["--resume"])
     assert calls == []
 
 
@@ -261,7 +265,7 @@ def test_python_failed_section_is_retried(mod, tmp_path, monkeypatch):
         return fake_aws(region, *args)
 
     monkeypatch.setattr(mod, "aws_json", recording)
-    mod.main(argv)
+    mod.main(argv + ["--resume"])
     assert ("ec2", "describe-snapshots") in calls
     assert ("acm", "list-certificates") not in calls
     assert [s["SnapshotId"] for s in _load(eu / "snapshots_volumeid.json")] == ["snap-1"]
@@ -282,10 +286,10 @@ def _ps_env(tmp_path, **extra):
     return {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", **extra}
 
 
-def _run_ps(shell, env, out_root, regions="all"):
+def _run_ps(shell, env, out_root, regions="all", *extra):
     res = subprocess.run(
         [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", SCRIPT_PS1,
-         "-AwsProfile", "p", "-Regions", regions, "-OutRoot", str(out_root)],
+         "-AwsProfile", "p", "-Regions", regions, "-OutRoot", str(out_root), *extra],
         capture_output=True, text=True, env=env, timeout=300,
     )
     assert res.returncode == 0, res.stdout + res.stderr
@@ -334,9 +338,9 @@ def test_powershell_resume(mod, tmp_path, shell):
     assert "error" in _load(eu / "snapshots_volumeid.json")
     assert _load(eu / "_state.json")["sections"]["snapshots"] == "error"
 
-    # Secondo run: solo la sezione in errore viene ritentata
+    # Secondo run in ripresa: solo la sezione in errore viene ritentata
     log.unlink()
-    out = _run_ps(shell, _ps_env(tmp_path, FAKE_AWS_LOG=str(log)), out_root, "eu-south-1")
+    out = _run_ps(shell, _ps_env(tmp_path, FAKE_AWS_LOG=str(log)), out_root, "eu-south-1", "-Resume")
     ops = {tuple(c[1:3]) for c in _logged_calls(log)}
     assert ("ec2", "describe-snapshots") in ops
     assert ("acm", "list-certificates") not in ops and ("ec2", "describe-volumes") not in ops
@@ -345,3 +349,10 @@ def test_powershell_resume(mod, tmp_path, shell):
     report = {v["VolumeId"]: v for v in _load(eu / "volumes_report.json")}
     assert report["vol-1"]["Snapshots"][0]["SnapshotId"] == "snap-1"
     assert _load(out_root / ACCOUNT / "_run.json")["regions"]["eu-south-1"] == "done"
+
+    # Terzo run senza opzioni: run precedente completato -> nuova estrazione completa da AWS
+    log.unlink()
+    out = _run_ps(shell, _ps_env(tmp_path, FAKE_AWS_LOG=str(log)), out_root, "eu-south-1")
+    ops = {tuple(c[1:3]) for c in _logged_calls(log)}
+    assert "full extraction from AWS" in out
+    assert ("acm", "list-certificates") in ops and ("ec2", "describe-volumes") in ops

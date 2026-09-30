@@ -1,11 +1,12 @@
 """Extract linked-resource JSON files for any AWS account, across regions.
 
 Usage: python scripts/extract_linked_resources.py --profile <profile>
-           [--account <id>] [--regions all] [--out-root extracted] [--fresh]
+           [--account <id>] [--regions all] [--out-root extracted] [--fresh | --resume]
   --account: default = account of the profile (sts get-caller-identity).
   --regions: "all" (default) = every region enabled on the account,
              or a single region / comma-separated list ("eu-south-1,eu-west-1").
-  --fresh:   ignore the saved state and extract everything again.
+  --fresh:   always extract everything again from AWS.
+  --resume:  reuse the saved sections even if the previous run completed.
 Output: <out-root>/<account>/<region>/*.json, kept only for regions that
 contain at least one resource. Objects are saved in full (no --query trimming).
 
@@ -16,6 +17,9 @@ ssm_managedinstances.json, volumes_all.json, volumes_live.json,
 volumes_report.json (+ instances_all.json).
 
 Robustness / resume:
+- every run calls AWS: if the previous run completed, a new run extracts
+  everything again. Saved sections are reused ONLY to resume a run that was
+  interrupted (or explicitly with --resume).
 - every section is written to disk as soon as it completes (atomic write),
   with its state in <region>/_state.json; the account-level progress is in
   <account>/_run.json. If the run is interrupted, re-running the same command
@@ -157,6 +161,7 @@ class Progress:
         self.items_done = 0
         self.state = read_json(run_path, {}) or {}
         self.state.setdefault("started_at", _now())
+        self.state.pop("finished_at", None)
         self.state["regions"] = {
             r: (self.state.get("regions", {}).get(r) if r in resumed_regions else "pending") for r in regions
         }
@@ -494,7 +499,9 @@ def main(argv=None):
     parser.add_argument("--account", default=None, help="account id (default: from sts get-caller-identity)")
     parser.add_argument("--regions", default="all", help='"all" (default), one region or "a,b"')
     parser.add_argument("--out-root", default=os.path.join(REPO, "extracted"), help="output root folder")
-    parser.add_argument("--fresh", action="store_true", help="ignore saved state, extract everything again")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--fresh", action="store_true", help="always extract everything again from AWS")
+    mode.add_argument("--resume", action="store_true", help="reuse saved sections even if the previous run completed")
     parser.add_argument("--retry-denied", action="store_true",
                         help="retry sections/regions denied by SCP/IAM (e.g. after a permission change)")
     args = parser.parse_args(argv)
@@ -505,7 +512,10 @@ def main(argv=None):
     account_dir = os.path.join(args.out_root, account)
     os.makedirs(account_dir, exist_ok=True)
     run_path = os.path.join(account_dir, RUN_STATE)
-    if args.fresh and os.path.exists(run_path):
+    # Run precedente completato -> nuova estrazione completa da AWS;
+    # run interrotto -> ripresa dalle sezioni salvate (o --resume esplicito)
+    fresh = args.fresh or (bool((read_json(run_path, {}) or {}).get("finished_at")) and not args.resume)
+    if fresh and os.path.exists(run_path):
         os.remove(run_path)
 
     previous = (read_json(run_path, {}) or {}).get("regions", {})
@@ -519,11 +529,12 @@ def main(argv=None):
     if finished:
         progress.log(f"Resume: {len(finished)} regions already completed ({', '.join(finished)})")
     progress.log(f"Progress file: {run_path}")
+    progress.log("Mode: " + ("full extraction from AWS" if fresh else "resume of an interrupted run (saved sections are reused)"))
 
     results = [(r, "resumed", None) for r in finished]
     if todo:
         with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(todo))) as pool:
-            results += list(pool.map(lambda r: run_region(r, account, args.out_root, progress, args.fresh, args.retry_denied), todo))
+            results += list(pool.map(lambda r: run_region(r, account, args.out_root, progress, fresh, args.retry_denied), todo))
 
     progress.log("")
     for region, counts, error in sorted(results):

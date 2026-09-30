@@ -1,0 +1,4 @@
+# Dipendenze degli strumenti in scripts/ (python -m pip install -r scripts/requirements.txt)
+openpyxl>=3.1
+python-docx>=1.1
+pytest>=8

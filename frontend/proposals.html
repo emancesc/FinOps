@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinOps — Proposta Tagging</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <nav>
+    <a class="brand" href="index.html">FinOps Tagging</a>
+    <a href="index.html">Setup Account</a>
+    <a href="dashboard.html">Dashboard</a>
+    <a href="inventory.html">Inventario</a>
+    <a href="proposals.html" class="active">Proposta Tagging</a>
+    <a href="review.html">Revisione Tag</a>
+    <a href="rules.html">Regole</a>
+    <a href="graph.html">Grafo</a>
+  </nav>
+  <main>
+    <h1>Proposta di tagging</h1>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Job</h2>
+        <button type="button" class="btn btn-secondary info-toggle" data-target="info-flow" aria-expanded="false">ⓘ Come funziona</button>
+      </div>
+      <div class="info-box" id="info-flow" hidden>
+        <p>La proposta applica la <strong>Tagging Strategy attiva</strong> (pagina Regole) a ogni risorsa del job e propone i
+          tag <code>cineca:*</code> mancanti o con valori non ammessi. È disponibile solo quando sono pronti:</p>
+        <ol>
+          <li><strong>Inventario</strong> estratto per il job (pagina Inventario);</li>
+          <li><strong>JSON a corredo</strong> dell'account (<code>scripts/extract_linked_resources.py</code>): istanze, volumi,
+            ENI, certificati ACM, stack CloudFormation, usati come evidenze e per l'ereditarietà volume → istanza;</li>
+          <li><strong>Tagging Strategy attiva</strong> con le regole estratte.</li>
+        </ol>
+        <p>I documenti di Design (HLD/LLD) e Assessment sono facoltativi ma migliorano molto la proposta: gli estratti
+          pertinenti a ciascuna risorsa (per nome) vengono passati all'LLM. Ogni valore proposto viene verificato contro i
+          valori ammessi della strategy; le proposte si rivedono nella pagina <em>Revisione Tag</em>.</p>
+      </div>
+      <div class="form-row">
+        <div class="form-group" style="flex:2">
+          <label for="job-select">Job</label>
+          <select id="job-select"></select>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Prerequisiti</h2>
+      <ul class="checklist" id="checklist"><li class="muted">Seleziona un job.</li></ul>
+    </div>
+
+    <div class="card">
+      <h2>Documenti di Design e Assessment</h2>
+      <form id="form-doc" class="form-row">
+        <div class="form-group" style="flex:2">
+          <label for="doc-file">Documento (PDF, DOCX, XLSX, testo)</label>
+          <input type="file" id="doc-file" accept=".pdf,.docx,.xlsx,.txt,.md,.csv" required />
+        </div>
+        <div class="form-group">
+          <label for="doc-type">Tipo</label>
+          <select id="doc-type">
+            <option value="HLD">Design — HLD</option>
+            <option value="LLD">Design — LLD</option>
+            <option value="PRE_MIGRATION_ASSESSMENT">Assessment (pre-migrazione)</option>
+            <option value="MIGRATION_RESOURCE_LIST">Lista risorse di migrazione</option>
+            <option value="OTHER">Altro</option>
+          </select>
+        </div>
+        <button type="submit" class="btn btn-secondary" id="btn-doc">Carica documento</button>
+      </form>
+      <p class="muted" id="doc-status"></p>
+      <table class="compact" id="docs-table">
+        <thead><tr><th>Documento</th><th>Tipo</th><th>Blocchi indicizzati</th><th>Caratteri</th><th>Caricato</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Genera proposta</h2>
+      <form id="form-generate" class="form-row">
+        <div class="form-group">
+          <label for="g-regions">Regioni (facoltativo)</label>
+          <input type="text" id="g-regions" placeholder="tutte, oppure eu-south-1,us-east-1" />
+        </div>
+        <div class="form-group">
+          <label for="g-types">Tipi di risorsa (facoltativo)</label>
+          <input type="text" id="g-types" placeholder="tutti, oppure AWS::EC2::Instance,AWS::EC2::Volume" />
+        </div>
+        <div class="form-group" style="max-width:180px">
+          <label for="g-max">Numero massimo risorse</label>
+          <input type="number" id="g-max" min="1" placeholder="tutte" />
+        </div>
+        <button type="submit" class="btn btn-primary" id="btn-generate" disabled>Genera proposta</button>
+      </form>
+      <p class="muted" id="estimate"></p>
+    </div>
+
+    <div class="card">
+      <h2>Esecuzioni</h2>
+      <table class="compact" id="runs-table">
+        <thead><tr><th>Avviata</th><th>Stato</th><th>Avanzamento</th><th>Proposte</th><th>Chiamate LLM</th><th>Token (in/out)</th><th>Opzioni</th><th></th></tr></thead>
+        <tbody><tr><td colspan="8" class="muted">Nessuna esecuzione.</td></tr></tbody>
+      </table>
+    </div>
+  </main>
+  <script src="js/api.js"></script>
+  <script src="js/proposals.js"></script>
+</body>
+</html>

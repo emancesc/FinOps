@@ -43,6 +43,7 @@ function initGraph(containerId) {
     ],
     layout: { name: "cose", animate: false },
   });
+  window.cy = cy; // usato da graph.html per il dettaglio del nodo selezionato
 }
 
 function loadGraphData(elements) {
@@ -53,6 +54,8 @@ function loadGraphData(elements) {
 }
 
 function convertNeo4jToElements(neo4jData) {
+  // /graph/group restituisce una lista di nodi Resource (senza relazioni)
+  if (Array.isArray(neo4jData)) neo4jData = { nodes: neo4jData, relationships: [] };
   const nodes = (neo4jData.nodes || []).map((n) => ({
     data: { id: n.arn || n.id, label: n.resource_type || n.label || n.name || n.arn, type: n.type, ...n },
   }));

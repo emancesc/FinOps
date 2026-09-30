@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FinOps — Registro Regole</title>
+  <title>FinOps — Regole di Tagging</title>
+  <link rel="icon" href="data:," />
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
@@ -11,23 +12,80 @@
     <a class="brand" href="index.html">FinOps Tagging</a>
     <a href="index.html">Setup Account</a>
     <a href="dashboard.html">Dashboard</a>
+    <a href="inventory.html">Inventario</a>
+    <a href="proposals.html">Proposta Tagging</a>
     <a href="review.html">Revisione Tag</a>
     <a href="rules.html" class="active">Regole</a>
     <a href="graph.html">Grafo</a>
   </nav>
   <main>
-    <h1>Registro Regole di Tagging</h1>
+    <h1>Regole di Tagging</h1>
+
     <div class="card">
+      <div class="card-head">
+        <h2>Carica una Tagging Strategy</h2>
+        <button type="button" class="btn btn-secondary info-toggle" data-target="info-upload" aria-expanded="false">ⓘ Come funziona</button>
+      </div>
+      <div class="info-box" id="info-upload" hidden>
+        <p>Carica il documento ufficiale (PDF, DOCX o testo). Un LLM lo legge a blocchi e ne ricava, per ogni tag
+          <code>cineca:*</code>, categoria, obbligatorietà, multi-valore e l'elenco completo dei valori ammessi, oltre alle
+          regole applicative (vincoli, regole per tipo di risorsa, pattern di nomi, risorse condivise, esempi reali).</p>
+        <p>Nome, revisione e data di rilascio vengono letti dal documento (copertina e changelog) se non li indichi.
+          Al termine rivedi tag e regole, approvali e <strong>attiva</strong> la revisione: è quella usata dalla Proposta Tagging.</p>
+      </div>
+      <form id="form-upload" class="form-row">
+        <div class="form-group" style="flex:2">
+          <label for="st-file">Documento</label>
+          <input type="file" id="st-file" accept=".pdf,.docx,.txt,.md" required />
+        </div>
+        <div class="form-group">
+          <label for="st-name">Nome (facoltativo)</label>
+          <input type="text" id="st-name" placeholder="dal documento" />
+        </div>
+        <div class="form-group" style="max-width:130px">
+          <label for="st-revision">Revisione</label>
+          <input type="text" id="st-revision" placeholder="es. 1.6" />
+        </div>
+        <div class="form-group" style="max-width:170px">
+          <label for="st-date">Data di rilascio</label>
+          <input type="date" id="st-date" />
+        </div>
+        <button type="submit" class="btn btn-primary" id="btn-upload">Carica ed estrai regole</button>
+      </form>
+      <p class="muted" id="upload-status" style="margin-top:0.5rem"></p>
+    </div>
+
+    <div class="card">
+      <h2>Tagging Strategy registrate</h2>
+      <div id="strategies"><p class="muted">Caricamento…</p></div>
+    </div>
+
+    <div class="card" id="detail" style="display:none">
+      <div class="card-head">
+        <h2 id="detail-title"></h2>
+        <div>
+          <button class="btn btn-secondary" id="btn-approve-all">Approva tutto</button>
+          <button class="btn btn-primary" id="btn-activate">Attiva questa revisione</button>
+        </div>
+      </div>
+      <div id="detail-meta"></div>
+      <div class="tabs">
+        <button class="tab active" data-tab="tags">Tag e valori ammessi</button>
+        <button class="tab" data-tab="rules">Regole applicative</button>
+        <button class="tab" data-tab="changelog">Changelog</button>
+      </div>
+      <div id="tab-tags"></div>
+      <div id="tab-rules" hidden></div>
+      <div id="tab-changelog" hidden></div>
+    </div>
+
+    <div class="card">
+      <h2>Regole apprese dall'arbitraggio (per tenant)</h2>
+      <p class="muted">Regole integrative proposte dall'Agent 3 durante l'arbitraggio dei casi incerti, riutilizzabili per il tenant
+        <strong id="tenant-label"></strong>.</p>
       <table id="rules-table">
         <thead>
-          <tr>
-            <th>Tag Key</th>
-            <th>Condizione</th>
-            <th>Risoluzione</th>
-            <th>Stato</th>
-            <th>Approvato da</th>
-            <th>Azioni</th>
-          </tr>
+          <tr><th>Tag Key</th><th>Condizione</th><th>Risoluzione</th><th>Stato</th><th>Approvato da</th><th>Azioni</th></tr>
         </thead>
         <tbody id="rules-body">
           <tr><td colspan="6" style="text-align:center; color:#6b7280;">Caricamento…</td></tr>
@@ -36,47 +94,6 @@
     </div>
   </main>
   <script src="js/api.js"></script>
-  <script>
-    const tenantId = localStorage.getItem("last_tenant_id") || "";
-
-    function badgeHtml(status) {
-      const cls = { proposed: "badge-proposed", approved: "badge-approved", rejected: "badge-rejected" }[status] || "";
-      return `<span class="badge ${cls}">${status}</span>`;
-    }
-
-    async function loadRules() {
-      try {
-        const rules = await api.listRules(tenantId);
-        const tbody = document.getElementById("rules-body");
-        if (!rules.length) { tbody.innerHTML = "<tr><td colspan='6' style='text-align:center'>Nessuna regola.</td></tr>"; return; }
-        tbody.innerHTML = rules.map(r => `
-          <tr>
-            <td>${r.tag_key}</td>
-            <td><pre style="font-size:0.75rem;margin:0">${JSON.stringify(r.condition, null, 2)}</pre></td>
-            <td><pre style="font-size:0.75rem;margin:0">${JSON.stringify(r.resolution, null, 2)}</pre></td>
-            <td>${badgeHtml(r.status)}</td>
-            <td>${r.approved_by || "—"}</td>
-            <td>
-              ${r.status === "proposed" ? `
-                <button class="btn btn-success" style="margin-right:4px;padding:0.25rem 0.6rem;font-size:0.8rem" onclick="approveRule('${r.rule_id}')">Approva</button>
-                <button class="btn btn-danger" style="padding:0.25rem 0.6rem;font-size:0.8rem" onclick="rejectRule('${r.rule_id}')">Rifiuta</button>
-              ` : "—"}
-            </td>
-          </tr>
-        `).join("");
-      } catch (err) {
-        document.getElementById("rules-body").innerHTML = `<tr><td colspan='6'>Errore: ${err.message}</td></tr>`;
-      }
-    }
-
-    async function approveRule(id) {
-      try { await api.approveRule(id); loadRules(); } catch (err) { alert("Errore: " + err.message); }
-    }
-    async function rejectRule(id) {
-      try { await api.rejectRule(id); loadRules(); } catch (err) { alert("Errore: " + err.message); }
-    }
-
-    loadRules();
-  </script>
+  <script src="js/rules.js"></script>
 </body>
 </html>

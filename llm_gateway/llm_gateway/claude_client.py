@@ -8,6 +8,7 @@ import anthropic
 from .base import LLMClient, LLMMessage, LLMResponse
 
 _MAX_RETRIES = 2
+_STREAMING_THRESHOLD = 16000
 _JSON_FENCE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
 
 
@@ -18,11 +19,19 @@ def _strip_fence(text: str) -> str:
 
 class ClaudeClient(LLMClient):
     def __init__(self) -> None:
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
         if not api_key:
             raise RuntimeError("ANTHROPIC_API_KEY non impostata")
+        if not api_key.isascii() or " " in api_key or "#" in api_key:
+            # tipico di un segnaposto con commento nel .env (es. "...  # <- inserire la chiave")
+            raise RuntimeError("ANTHROPIC_API_KEY non valida: sembra un segnaposto o contiene un commento; "
+                               "impostare la chiave reale nel file .env")
         self._model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
-        self._client = anthropic.AsyncAnthropic(api_key=api_key)
+        # Chiavi di organizzazione non legate a un workspace: l'API richiede l'header
+        # anthropic-workspace-id con l'ID del workspace da usare (ANTHROPIC_WORKSPACE_ID).
+        workspace_id = (os.environ.get("ANTHROPIC_WORKSPACE_ID") or "").strip()
+        headers = {"anthropic-workspace-id": workspace_id} if workspace_id else None
+        self._client = anthropic.AsyncAnthropic(api_key=api_key, default_headers=headers)
 
     async def complete(
         self,
@@ -47,13 +56,22 @@ class ClaudeClient(LLMClient):
                     ),
                 })
 
-            resp = await self._client.messages.create(
+            # System prompt in cache: le chiamate ripetute (es. una per batch di
+            # risorse) condividono lo stesso prefisso con le regole della strategy.
+            request = dict(
                 model=self._model,
                 max_tokens=max_tokens,
-                system=system,
+                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
                 messages=api_messages,
             )
-            last_content = resp.content[0].text
+            if max_tokens > _STREAMING_THRESHOLD:
+                # Output lunghi: streaming per non incorrere nei timeout HTTP
+                async with self._client.messages.stream(**request) as stream:
+                    resp = await stream.get_final_message()
+            else:
+                resp = await self._client.messages.create(**request)
+            # Solo i blocchi di testo (eventuali blocchi thinking non hanno "text")
+            last_content = "".join(b.text for b in resp.content if isinstance(getattr(b, "text", None), str))
 
             if response_format is None:
                 return LLMResponse(

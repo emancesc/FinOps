@@ -87,3 +87,64 @@ tr:hover td { background: #f9fafb; }
 .progress-bar-fill { height: 100%; background: #2563eb; transition: width 0.4s; }
 
 #graph-container { width: 100%; height: 600px; background: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb; }
+
+/* --- Inventario --- */
+.muted { color: #6b7280; font-size: 0.85rem; }
+.form-row { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end; }
+.form-row .form-group { flex: 1; min-width: 180px; margin-bottom: 0; }
+.stats { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; }
+.stat { background: #f3f4f6; border-radius: 6px; padding: 0.75rem 1rem; min-width: 150px; }
+.stat-value { font-size: 1.5rem; font-weight: 700; color: #1a2540; }
+.stat-label { font-size: 0.8rem; color: #6b7280; }
+.chips { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.chip { background: #e0e7ff; color: #1e3a8a; border-radius: 999px; padding: 0.15rem 0.7rem; font-size: 0.8rem; }
+.badge-ok { background: #d1fae5; color: #065f46; }
+.badge-bad { background: #fee2e2; color: #991b1b; }
+.table-wrap { max-height: 600px; overflow: auto; margin-top: 0.5rem; }
+#inv-table tbody tr { cursor: pointer; }
+#inv-table tbody tr:hover { background: #f9fafb; }
+.json-view { font-size: 0.8rem; overflow: auto; max-height: 500px; background: #f3f4f6; padding: 1rem; border-radius: 6px; }
+#inv-table { table-layout: fixed; font-size: 0.8rem; }
+#inv-table th, #inv-table td { padding: 0.4rem 0.5rem; vertical-align: top; }
+#inv-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#inv-table th:nth-child(1) { width: 95px; }
+#inv-table th:nth-child(2) { width: 200px; }
+#inv-table th:nth-child(3) { width: 210px; }
+#inv-table th:nth-child(4) { width: 140px; }
+#inv-table th:nth-child(5) { width: 80px; }
+#inv-table th:nth-child(6) { width: 200px; }
+
+/* --- Pulsanti info (Setup Account) --- */
+.card-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+.card-head h2 { margin-bottom: 0; }
+.info-btn { border: 1px solid #93c5fd; background: #eff6ff; color: #1d4ed8; border-radius: 999px; width: 1.4rem; height: 1.4rem;
+  font-size: 0.8rem; line-height: 1; cursor: pointer; margin-left: 0.35rem; vertical-align: middle; }
+.info-btn:hover, .info-btn[aria-expanded="true"] { background: #1d4ed8; color: #fff; }
+.info-box { background: #eff6ff; border-left: 3px solid #2563eb; border-radius: 6px; padding: 0.75rem 1rem; margin: 0.5rem 0 0.75rem;
+  font-size: 0.85rem; color: #1f2937; }
+.info-box p + p, .info-box p + ul, .info-box p + ol, .info-box ul + p, .info-box ol + p { margin-top: 0.5rem; }
+.info-box ul, .info-box ol { padding-left: 1.2rem; }
+.info-box li { margin: 0.2rem 0; }
+.info-box code { background: #dbeafe; padding: 0 0.25rem; border-radius: 3px; font-size: 0.8rem; word-break: break-all; }
+
+/* --- Regole / Proposta Tagging --- */
+.btn-sm { padding: 0.2rem 0.55rem; font-size: 0.78rem; }
+table.compact { font-size: 0.82rem; }
+table.compact th, table.compact td { padding: 0.4rem 0.5rem; vertical-align: top; }
+.group-title { font-size: 1rem; margin: 1rem 0 0.5rem; color: #1a2540; }
+.row-selected td { background: #eff6ff; }
+.tabs { display: flex; gap: 0.25rem; border-bottom: 1px solid #e5e7eb; margin: 1rem 0 0.75rem; }
+.tab { background: none; border: none; padding: 0.5rem 0.9rem; cursor: pointer; font-size: 0.88rem; color: #4b5563;
+  border-bottom: 2px solid transparent; }
+.tab.active { color: #1d4ed8; border-bottom-color: #1d4ed8; font-weight: 600; }
+.values { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.4rem; max-height: 220px; overflow: auto; }
+.values .chip em { font-style: normal; color: #6b7280; font-size: 0.7rem; }
+pre.mini { font-size: 0.72rem; margin: 0 0 0.3rem; white-space: pre-wrap; background: #f3f4f6; padding: 0.3rem; border-radius: 4px; }
+details summary { cursor: pointer; color: #1d4ed8; }
+.checklist { list-style: none; display: flex; flex-direction: column; gap: 0.6rem; }
+.checklist li { display: flex; gap: 0.6rem; align-items: flex-start; }
+.checklist .mark { width: 1.4rem; height: 1.4rem; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 700; flex-shrink: 0; }
+.checklist li.ok .mark { background: #d1fae5; color: #065f46; }
+.checklist li.ko .mark { background: #fee2e2; color: #991b1b; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }

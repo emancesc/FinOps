@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>FinOps — Dashboard Job</title>
+  <link rel="icon" href="data:," />
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
@@ -11,6 +12,8 @@
     <a class="brand" href="index.html">FinOps Tagging</a>
     <a href="index.html">Setup Account</a>
     <a href="dashboard.html" class="active">Dashboard</a>
+    <a href="inventory.html">Inventario</a>
+    <a href="proposals.html">Proposta Tagging</a>
     <a href="review.html">Revisione Tag</a>
     <a href="rules.html">Regole</a>
     <a href="graph.html">Grafo</a>
@@ -19,6 +22,7 @@
     <h1>Dashboard Job</h1>
     <div class="card" id="job-card">
       <p>Job ID: <strong id="job-id">—</strong></p>
+      <p>Account: <strong id="job-account">—</strong> — Regioni: <strong id="job-regions">—</strong></p>
       <p>Fase: <strong id="job-phase">—</strong></p>
       <p>Dettaglio: <span id="job-detail">—</span></p>
       <div class="progress-bar">
@@ -31,6 +35,7 @@
       <div id="log" style="font-family:monospace; font-size:0.8rem; max-height:300px; overflow-y:auto; background:#f3f4f6; padding:1rem; border-radius:6px;"></div>
     </div>
     <div class="card">
+      <a href="inventory.html" id="go-inventory" class="btn btn-secondary">Inventario risorse →</a>
       <a href="review.html" id="go-review" class="btn btn-primary" style="display:none">Vai alla Revisione Tag →</a>
     </div>
   </main>
@@ -45,6 +50,14 @@
       const el = document.getElementById("log");
       el.innerHTML += `<div>${new Date().toLocaleTimeString()} — ${msg}</div>`;
       el.scrollTop = el.scrollHeight;
+    }
+
+    function showScope(job) {
+      document.getElementById("job-account").textContent = job.account_id || "—";
+      const regions = job.region || "all";
+      document.getElementById("job-regions").textContent =
+        regions === "all" ? "tutte le regioni abilitate" : regions.split(",").join(", ");
+      document.getElementById("go-inventory").href = `inventory.html?job_id=${jobId}`;
     }
 
     function updateJobUI(data) {
@@ -62,7 +75,7 @@
 
     if (jobId) {
       // Carica stato iniziale
-      api.getJob(jobId).then(updateJobUI).catch(() => appendLog("Impossibile caricare job"));
+      api.getJob(jobId).then((job) => { showScope(job); updateJobUI(job); }).catch(() => appendLog("Impossibile caricare job"));
       // Aggiornamenti real-time
       const sock = new JobSocket(jobId, updateJobUI);
       sock.connect();

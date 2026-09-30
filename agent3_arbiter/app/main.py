@@ -242,3 +242,192 @@ async def post_resource_type(req: MandatoryTypeRequest):
         upsert_mandatory_type, req.tenant_id, req.resource_type, req.is_mandatory, req.reason
     )
     return {"tenant_id": req.tenant_id, "resource_type": req.resource_type, "is_mandatory": req.is_mandatory}
+
+
+# ---------------------------------------------------------------------------
+# Registro Tagging Strategy (documento ufficiale -> regole estratte via LLM)
+# ---------------------------------------------------------------------------
+
+from fastapi import File, Form, UploadFile  # noqa: E402
+
+_UPLOAD_DIR = os.environ.get(
+    "STRATEGY_UPLOAD_DIR",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "uploads", "strategies"),
+)
+_extraction_tasks: dict[str, asyncio.Task] = {}
+
+
+@app.on_event("startup")
+async def _mark_interrupted_extractions():
+    """Estrazioni rimaste 'extracting' dopo un riavvio del servizio: segnate come interrotte (riprendibili)."""
+    from . import strategy_db as sdb
+    try:
+        await asyncio.to_thread(sdb.mark_interrupted)
+    except Exception as exc:  # DB non raggiungibile all'avvio: non blocca il servizio
+        logger.warning("Impossibile verificare le estrazioni interrotte: %s", exc)
+
+
+class StrategyMetaUpdate(BaseModel):
+    name: Optional[str] = None
+    revision: Optional[str] = None
+    release_date: Optional[str] = None
+
+
+class ReviewRequest(BaseModel):
+    status: str  # approved | rejected | proposed
+    reviewed_by: Optional[str] = "operator"
+
+
+def _start_extraction(strategy_id: str, fresh: bool = False) -> None:
+    from .strategy import extract_strategy
+
+    running = _extraction_tasks.get(strategy_id)
+    if running and not running.done():
+        return
+    llm = _llm_override  # nei test; altrimenti extract_strategy crea il client dal factory
+    _extraction_tasks[strategy_id] = asyncio.create_task(extract_strategy(strategy_id, llm_client=llm, fresh=fresh))
+
+
+@app.post("/strategies", status_code=201)
+async def upload_strategy(
+    file: UploadFile = File(...),
+    name: Optional[str] = Form(default=None),
+    revision: Optional[str] = Form(default=None),
+    release_date: Optional[str] = Form(default=None),
+    uploaded_by: Optional[str] = Form(default=None),
+    extract: bool = Form(default=True),
+):
+    """
+    Carica un documento di Tagging Strategy e avvia in background l'estrazione delle
+    regole via LLM. Nome, revisione e data di rilascio, se non indicati, vengono
+    ricavati dal documento (changelog/copertina).
+    """
+    import uuid
+    from . import strategy_db as sdb
+
+    os.makedirs(_UPLOAD_DIR, exist_ok=True)
+    safe_name = os.path.basename(file.filename or "strategy.pdf")
+    path = os.path.join(_UPLOAD_DIR, f"{uuid.uuid4().hex[:8]}_{safe_name}")
+    with open(path, "wb") as out:
+        out.write(await file.read())
+
+    provisional = f"bozza-{uuid.uuid4().hex[:6]}"
+    try:
+        strategy = await asyncio.to_thread(
+            sdb.create_strategy,
+            name or os.path.splitext(safe_name)[0], revision or provisional, release_date,
+            safe_name, path, uploaded_by,
+        )
+    except Exception as exc:  # es. nome + revisione già presenti
+        os.remove(path)
+        raise HTTPException(status_code=409, detail=f"Strategy non registrata: {exc}")
+    if extract:
+        _start_extraction(strategy["strategy_id"])
+    return strategy
+
+
+@app.get("/strategies")
+async def get_strategies():
+    """Elenco delle strategy, ordinate per nome e data di rilascio (revisioni più recenti prima)."""
+    from . import strategy_db as sdb
+    return await asyncio.to_thread(sdb.list_strategies)
+
+
+@app.get("/strategies/active")
+async def get_active_strategy(include_rules: bool = Query(default=True)):
+    """Strategy attiva con tag e regole non rifiutati: è la base della proposta di tagging."""
+    from . import strategy_db as sdb
+
+    strategy = await asyncio.to_thread(sdb.get_active_strategy)
+    if not strategy:
+        raise HTTPException(status_code=404, detail="Nessuna Tagging Strategy attiva")
+    tags = await asyncio.to_thread(sdb.list_tags, strategy["strategy_id"])
+    strategy["tags"] = [t for t in tags if t["status"] != "rejected"]
+    if include_rules:
+        rules = await asyncio.to_thread(sdb.list_rules, strategy["strategy_id"])
+        strategy["rules"] = [r for r in rules if r["status"] != "rejected"]
+    return strategy
+
+
+@app.get("/strategies/{strategy_id}")
+async def get_strategy_detail(strategy_id: str):
+    from . import strategy_db as sdb
+
+    strategy = await asyncio.to_thread(sdb.get_strategy, strategy_id)
+    if not strategy:
+        raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} non trovata")
+    strategy["tags"] = await asyncio.to_thread(sdb.list_tags, strategy_id)
+    strategy["rules"] = await asyncio.to_thread(sdb.list_rules, strategy_id)
+    task = _extraction_tasks.get(strategy_id)
+    strategy["extraction_running"] = bool(task and not task.done())
+    return strategy
+
+
+@app.patch("/strategies/{strategy_id}")
+async def patch_strategy(strategy_id: str, req: StrategyMetaUpdate):
+    from . import strategy_db as sdb
+    try:
+        await asyncio.to_thread(sdb.update_metadata, strategy_id, req.name, req.revision, req.release_date)
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return await asyncio.to_thread(sdb.get_strategy, strategy_id)
+
+
+@app.post("/strategies/{strategy_id}/extract", status_code=202)
+async def extract_strategy_endpoint(strategy_id: str, fresh: bool = Query(default=False)):
+    """(Ri)avvia l'estrazione: riprende dall'ultimo blocco salvato, o da capo con fresh=true."""
+    from . import strategy_db as sdb
+    if not await asyncio.to_thread(sdb.get_strategy, strategy_id):
+        raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} non trovata")
+    _start_extraction(strategy_id, fresh=fresh)
+    return {"strategy_id": strategy_id, "status": "extracting"}
+
+
+@app.post("/strategies/{strategy_id}/activate")
+async def activate_strategy(strategy_id: str):
+    from . import strategy_db as sdb
+    strategy = await asyncio.to_thread(sdb.get_strategy, strategy_id)
+    if not strategy:
+        raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} non trovata")
+    if strategy["status"] != "extracted":
+        raise HTTPException(status_code=409, detail="Estrazione non completata: impossibile attivare")
+    await asyncio.to_thread(sdb.activate, strategy_id)
+    return {"strategy_id": strategy_id, "is_active": True}
+
+
+@app.patch("/strategies/{strategy_id}/tags/{tag_id}")
+async def review_strategy_tag(strategy_id: str, tag_id: str, req: ReviewRequest):
+    from . import strategy_db as sdb
+    n = await asyncio.to_thread(sdb.set_item_status, "strategy_tags", strategy_id, tag_id, req.status, req.reviewed_by)
+    if not n:
+        raise HTTPException(status_code=404, detail="Tag non trovato")
+    return {"id": tag_id, "status": req.status}
+
+
+@app.patch("/strategies/{strategy_id}/rules/{rule_id}")
+async def review_strategy_rule(strategy_id: str, rule_id: str, req: ReviewRequest):
+    from . import strategy_db as sdb
+    n = await asyncio.to_thread(sdb.set_item_status, "strategy_rules", strategy_id, rule_id, req.status, req.reviewed_by)
+    if not n:
+        raise HTTPException(status_code=404, detail="Regola non trovata")
+    return {"rule_id": rule_id, "status": req.status}
+
+
+@app.post("/strategies/{strategy_id}/approve-all")
+async def approve_all(strategy_id: str, reviewed_by: str = Query(default="operator")):
+    """Approva tutti i tag e le regole ancora in stato 'proposed'."""
+    from . import strategy_db as sdb
+    tags = await asyncio.to_thread(sdb.set_item_status, "strategy_tags", strategy_id, None, "approved", reviewed_by)
+    rules = await asyncio.to_thread(sdb.set_item_status, "strategy_rules", strategy_id, None, "approved", reviewed_by)
+    return {"strategy_id": strategy_id, "tags_approved": tags, "rules_approved": rules}
+
+
+@app.delete("/strategies/{strategy_id}")
+async def delete_strategy(strategy_id: str):
+    from . import strategy_db as sdb
+    path = await asyncio.to_thread(sdb.delete_strategy, strategy_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} non trovata")
+    if path and os.path.exists(path):
+        os.remove(path)
+    return {"strategy_id": strategy_id, "deleted": True}

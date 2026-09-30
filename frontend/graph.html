@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>FinOps — Esplorazione Grafo</title>
+  <link rel="icon" href="data:," />
   <link rel="stylesheet" href="css/style.css" />
   <script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
 </head>
@@ -12,6 +13,8 @@
     <a class="brand" href="index.html">FinOps Tagging</a>
     <a href="index.html">Setup Account</a>
     <a href="dashboard.html">Dashboard</a>
+    <a href="inventory.html">Inventario</a>
+    <a href="proposals.html">Proposta Tagging</a>
     <a href="review.html">Revisione Tag</a>
     <a href="rules.html">Regole</a>
     <a href="graph.html" class="active">Grafo</a>
@@ -28,16 +31,25 @@
         <div style="flex:1; min-width:200px;">
           <label>Dimensione di raggruppamento</label>
           <select id="dim-select">
-            <option value="business_unit">Business Unit</option>
-            <option value="environment">Environment</option>
-            <option value="cost_center">Cost Center</option>
-            <option value="customer">Customer</option>
-            <option value="application">Application</option>
+            <!-- valori allineati a agent4 (_TAG_DIMENSION_MAP e attributi del nodo Resource) -->
+            <optgroup label="Tag">
+              <option value="business-unit">Business Unit</option>
+              <option value="environment">Environment</option>
+              <option value="cost-center">Cost Center</option>
+              <option value="application">Application</option>
+              <option value="team">Team</option>
+            </optgroup>
+            <optgroup label="Attributi risorsa">
+              <option value="region">Regione</option>
+              <option value="resource_type">Tipo risorsa</option>
+              <option value="account_id">Account</option>
+              <option value="instance_type">Instance type</option>
+            </optgroup>
           </select>
         </div>
         <div style="flex:1; min-width:180px;">
           <label>Valore</label>
-          <input type="text" id="dim-value" placeholder="es. BU-Infrastrutttura" />
+          <input type="text" id="dim-value" placeholder="es. eu-south-1, AWS::EC2::Instance, PROD" />
         </div>
         <button class="btn btn-secondary" onclick="loadByGroup()">Filtra per gruppo</button>
       </div>

@@ -8,6 +8,8 @@ def fake_aws(region, *args):
         raise RuntimeError("AccessDeniedException")
     if call == "sts get-caller-identity":
         return {"Account": "123456789012"}
+    if call.startswith("resource-explorer-2 "):
+        return fake_resource_explorer(region, *args)
     if call == "ec2 describe-regions":
         return {"Regions": [{"RegionName": r} for r in ("eu-south-1", "eu-west-1", "us-east-1")]}
     if call == "ssm describe-instance-information":
@@ -53,3 +55,52 @@ def fake_aws(region, *args):
             {"InstanceId": "i-2", "State": {"Name": "stopped"}},
         ]}]}
     raise AssertionError(f"chiamata inattesa: {region} {args}")
+
+
+def _re_resource(region, kind, rid, tags=None):
+    props = []
+    if tags is not None:
+        props.append({"Name": "tags", "LastReportedAt": "2026-09-25T12:00:00+00:00",
+                      "Data": [{"Key": k, "Value": v} for k, v in tags.items()]})
+    service, rtype = kind.split(":")
+    return {
+        "Arn": f"arn:aws:{service}:{region}:123456789012:{rtype}/{rid}",
+        "OwningAccountId": "123456789012",
+        "Region": region,
+        "ResourceType": kind,
+        "Service": service,
+        "LastReportedAt": "2026-09-26T03:00:00+00:00",
+        "Properties": props,
+    }
+
+
+COMPLIANT = {"cineca:BusinessUnit": "UNIV", "cineca:Customer": "UNIBO", "cineca:Product": "ESSE3",
+             "cineca:Environment": "PROD", "cineca:Role": "Web", "Name": "web-01", "Owner": "team-a"}
+
+# Resource Explorer: eu-south-1 su 2 pagine, us-east-1 1 pagina, eu-west-1 negata da SCP
+RESOURCE_EXPLORER_PAGES = {
+    "eu-south-1": [
+        [_re_resource("eu-south-1", "ec2:instance", "i-1", COMPLIANT),
+         _re_resource("eu-south-1", "ec2:volume", "vol-1", {"Name": "data", "cineca:Customer": "UNIBO"})],
+        [_re_resource("eu-south-1", "ec2:snapshot", "snap-1"),
+         _re_resource("eu-south-1", "s3:bucket", "b-1", {"cineca:Custom": "x"})],
+    ],
+    "us-east-1": [[_re_resource("us-east-1", "acm:certificate", "c-1", {"Name": "cert"})]],
+}
+
+
+def fake_resource_explorer(region, *args):
+    call = " ".join(args[:2])
+    if call == "resource-explorer-2 list-indexes":
+        return {"Indexes": [{"Region": r, "Type": "LOCAL"} for r in ("eu-south-1", "eu-west-1", "us-east-1")]}
+    if call == "resource-explorer-2 list-resources":
+        if region == "eu-west-1":
+            raise RuntimeError("AccessDeniedException ... with an explicit deny in a service control policy")
+        pages = RESOURCE_EXPLORER_PAGES.get(region, [[]])
+        token = args[args.index("--next-token") + 1] if "--next-token" in args else None
+        index = int(token.split("-")[1]) if token else 0
+        out = {"Resources": pages[index], "ViewArn": f"arn:view/{region}"}
+        if index + 1 < len(pages):
+            out["NextToken"] = f"page-{index + 1}"
+        return out
+    raise AssertionError(f"chiamata resource-explorer inattesa: {region} {args}")
