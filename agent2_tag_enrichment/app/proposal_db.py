@@ -198,7 +198,8 @@ def update_run(run_id: str, **fields) -> None:
     _execute(f"UPDATE proposal_runs SET {', '.join(sets)} WHERE run_id = %s::uuid", (*params, run_id))
 
 
-def save_run_proposals(job_id: str, run_id: str, strategy_id: str, proposals: list[dict]) -> int:
+def save_run_proposals(job_id: str, run_id: str, strategy_id: str, proposals: list[dict],
+                       review_status: str = "pending", reviewed_by: Optional[str] = None) -> int:
     """Upsert su (job, risorsa, tag): una revisione manuale già fatta non viene sovrascritta."""
     if not proposals:
         return 0
@@ -210,19 +211,20 @@ def save_run_proposals(job_id: str, run_id: str, strategy_id: str, proposals: li
             psycopg2.extras.execute_values(
                 cur,
                 """INSERT INTO tag_proposals (job_id, account_id, resource_id, tag_key, tag_value, confidence, source_type,
-                                              source_ref, run_id, strategy_id, reasoning, current_value)
+                                              source_ref, run_id, strategy_id, reasoning, current_value,
+                                              review_status, reviewed_by)
                    VALUES %s
                    ON CONFLICT (job_id, resource_id, tag_key) DO UPDATE SET
                        tag_value = EXCLUDED.tag_value, confidence = EXCLUDED.confidence,
                        source_type = EXCLUDED.source_type, source_ref = EXCLUDED.source_ref,
                        run_id = EXCLUDED.run_id, strategy_id = EXCLUDED.strategy_id,
                        reasoning = EXCLUDED.reasoning, current_value = EXCLUDED.current_value,
-                       review_status = 'pending', reviewed_by = NULL, updated_at = now()
+                       review_status = EXCLUDED.review_status, reviewed_by = EXCLUDED.reviewed_by, updated_at = now()
                    WHERE tag_proposals.review_status = 'pending'""",
                 [(job_id, account_id, p["resource_id"], p["tag_key"], p.get("tag_value"), round(float(p.get("confidence") or 0), 2),
                   p.get("source_type", "llm"), p.get("source_ref"), run_id, strategy_id, p.get("reasoning"),
-                  p.get("current_value")) for p in proposals],
-                template="(%s::uuid, %s, %s, %s, %s, %s, %s, %s, %s::uuid, %s::uuid, %s, %s)",
+                  p.get("current_value"), review_status, reviewed_by) for p in proposals],
+                template="(%s::uuid, %s, %s, %s, %s, %s, %s, %s, %s::uuid, %s::uuid, %s, %s, %s, %s)",
                 page_size=len(proposals))  # una sola pagina: rowcount conta tutte le righe
             return cur.rowcount
     finally:

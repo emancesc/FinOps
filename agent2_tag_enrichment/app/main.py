@@ -323,6 +323,22 @@ async def bulk_review(req: BulkReview):
     return {"updated": n, "review_status": req.review_status}
 
 
+@app.post("/proposals/import", status_code=201)
+async def import_proposals(job_id: str = Form(...), file: UploadFile = File(...), approve: bool = Form(False)):
+    """Carica una proposta già compilata (xlsx nel formato dell'export: foglio Proposta o Dettaglio proposte)."""
+    from .proposal_import import import_xlsx
+
+    if not (file.filename or "").lower().endswith((".xlsx", ".xlsm")):
+        raise HTTPException(status_code=422, detail="Formato non supportato: caricare un file .xlsx")
+    content = await file.read()
+    try:
+        return await asyncio.to_thread(import_xlsx, job_id, file.filename, content, approve)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
 @app.get("/proposals/export.xlsx")
 async def export_proposals(job_id: str = Query(...), run_id: Optional[str] = None):
     """Proposta in xlsx: una riga per risorsa (attuale e proposto per ogni tag), dettaglio e riepilogo."""

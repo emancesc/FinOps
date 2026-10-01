@@ -124,6 +124,33 @@ $("form-doc").addEventListener("submit", async (e) => {
   }
 });
 
+$("form-import").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const form = new FormData();
+  form.append("job_id", jobId);
+  form.append("file", $("import-file").files[0]);
+  form.append("approve", $("import-approve").checked ? "true" : "false");
+  $("btn-import").disabled = true;
+  $("import-status").textContent = "Import in corso…";
+  try {
+    const r = await api.importProposals(form);
+    const notes = [];
+    if (r.invalid_values) notes.push(`${r.invalid_values} valori non ammessi (segnalati)`);
+    if (r.unchanged) notes.push(`${r.unchanged} uguali al valore attuale (ignorati)`);
+    if (r.unknown_resources) notes.push(`${r.unknown_resources} ARN non presenti nel job (ignorati)`);
+    if (r.unknown_tags.length) notes.push(`tag non della strategy ignorati: ${r.unknown_tags.join(", ")}`);
+    if (r.not_overwritten_reviewed) notes.push(`${r.not_overwritten_reviewed} già revisionate non sovrascritte`);
+    $("import-status").textContent = `Importate ${r.saved} proposte su ${r.resources} risorse dal foglio "${r.sheet}"`
+      + ` (stato: ${r.review_status === "approved" ? "approvate" : "da rivedere"})` + (notes.length ? " — " + notes.join("; ") : "") + ".";
+    $("form-import").reset();
+    loadRuns();
+  } catch (err) {
+    $("import-status").textContent = "Errore: " + err.message;
+  } finally {
+    $("btn-import").disabled = false;
+  }
+});
+
 $("form-generate").addEventListener("submit", async (e) => {
   e.preventDefault();
   const split = (v) => v.split(",").map((x) => x.trim()).filter(Boolean);

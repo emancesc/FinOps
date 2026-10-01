@@ -48,6 +48,7 @@ const api = {
   listProposalRuns: (jobId) => apiFetch(AGENT2_URL, `/proposals/runs?job_id=${jobId}`),
   getProposalRun: (runId) => apiFetch(AGENT2_URL, `/proposals/runs/${runId}`),
   resumeProposalRun: (runId) => apiFetch(AGENT2_URL, `/proposals/runs/${runId}/resume`, { method: "POST" }),
+  importProposals: (formData) => uploadForm(AGENT2_URL, "/proposals/import", formData),
 
   // Tag proposals
   listProposals: (jobId, filters = {}) =>

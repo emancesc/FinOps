@@ -320,3 +320,62 @@ async def test_bulk_review_and_xlsx_export(api, world):
     assert by_arn[VOLUME]["cineca:Customer (proposto)"] == "UNIBO"           # ereditato dall'istanza
     assert by_arn[VOLUME]["cineca_mandatory_compliant"] == "NO"
     assert len(list(wb["Dettaglio proposte"].iter_rows(values_only=True))) == len(ids) + 1
+
+
+def _xlsx(sheet: str, rows: list[list]) -> bytes:
+    from io import BytesIO
+
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    wb.active.title = sheet
+    for row in rows:
+        wb.active.append(row)
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_import_external_xlsx(api, world):
+    c, main = api
+    _add_inventory(world["job_id"])
+    other = f"arn:aws:sqs:{REGION}:{ACCOUNT}:fuori-dal-job"
+    wide = _xlsx("Proposta", [
+        ["Region", "Arn", "cineca:Customer (proposto)", "cineca:Product (proposto)", "cineca:Environment (proposto)"],
+        [REGION, INSTANCE, "UNIBO", "ESSE3", None],
+        [REGION, QUEUE, "POLIMI", "NONESISTE", "PROD"],
+        [REGION, other, "UNIBO", None, None],
+    ])
+    xlsx = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    r = await c.post("/proposals/import", data={"job_id": world["job_id"]},
+                     files={"file": ("proposta_esterna.xlsx", wide, xlsx)})
+    assert r.status_code == 201, r.text
+    s = r.json()
+    assert (s["sheet"], s["saved"], s["resources"], s["invalid_values"], s["unknown_resources"]) == ("Proposta", 5, 2, 1, 1)
+    proposals = {(p["resource_id"], p["tag_key"]): p for p in (await c.get("/proposals", params={"job_id": world["job_id"]})).json()}
+    assert proposals[(QUEUE, "cineca:Customer")]["tag_value"] == "POLIMI"
+    assert proposals[(QUEUE, "cineca:Customer")]["source_type"] == "manual_override"
+    assert proposals[(QUEUE, "cineca:Product")]["reasoning"].startswith("[VALORE NON AMMESSO")
+    assert {p["review_status"] for p in proposals.values()} == {"pending"}
+
+    # formato lungo, importato come approvato: sovrascrive le proposte ancora da rivedere
+    long = _xlsx("Dettaglio proposte", [
+        ["Arn", "Tag", "Valore proposto"],
+        [INSTANCE, "cineca:Customer", "POLIMI"], [INSTANCE, "cineca:Role", "Compute-Application"], [INSTANCE, "foo:Bar", "x"],
+    ])
+    s = (await c.post("/proposals/import", data={"job_id": world["job_id"], "approve": "true"},
+                      files={"file": ("dettaglio.xlsx", long, xlsx)})).json()
+    assert (s["saved"], s["unknown_tags"], s["review_status"]) == (2, ["foo:Bar"], "approved")
+    # le proposte già revisionate non vengono sovrascritte da un import successivo
+    again = _xlsx("Proposta", [["Arn", "cineca:Customer"], [INSTANCE, "UNIBO"]])
+    s = (await c.post("/proposals/import", data={"job_id": world["job_id"]},
+                      files={"file": ("di_nuovo.xlsx", again, xlsx)})).json()
+    assert (s["saved"], s["not_overwritten_reviewed"]) == (0, 1)
+    proposals = {(p["resource_id"], p["tag_key"]): p for p in (await c.get("/proposals", params={"job_id": world["job_id"]})).json()}
+    assert proposals[(INSTANCE, "cineca:Customer")]["tag_value"] == "POLIMI"
+    assert proposals[(INSTANCE, "cineca:Customer")]["review_status"] == "approved"
+
+    r = await c.post("/proposals/import", data={"job_id": world["job_id"]},
+                     files={"file": ("vuoto.xlsx", _xlsx("Foglio", [["a", "b"], [1, 2]]), xlsx)})
+    assert r.status_code == 422

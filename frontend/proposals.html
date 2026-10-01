@@ -101,6 +101,26 @@
     </div>
 
     <div class="card">
+      <h2>Importa proposta compilata (xlsx)</h2>
+      <p class="muted">Carica una proposta preparata fuori dalla piattaforma, nel formato dell'export della pagina
+        <em>Revisione Tag</em>: foglio <strong>Proposta</strong> (colonna <code>Arn</code> e colonne
+        <code>&lt;tag&gt; (proposto)</code>, oppure direttamente le colonne <code>cineca:*</code>) o foglio
+        <strong>Dettaglio proposte</strong> (colonne <code>Arn</code>, <code>Tag</code>, <code>Valore proposto</code>).
+        I valori sono verificati contro la strategy attiva; le proposte già revisionate non vengono sovrascritte.</p>
+      <form id="form-import" class="form-row">
+        <div class="form-group" style="flex:2">
+          <label for="import-file">File xlsx</label>
+          <input type="file" id="import-file" accept=".xlsx,.xlsm" required />
+        </div>
+        <div class="form-group">
+          <label><input type="checkbox" id="import-approve" /> Importa come già approvate</label>
+        </div>
+        <button type="submit" class="btn btn-secondary" id="btn-import">Importa proposta</button>
+      </form>
+      <p class="muted" id="import-status"></p>
+    </div>
+
+    <div class="card">
       <h2>Esecuzioni</h2>
       <table class="compact" id="runs-table">
         <thead><tr><th>Avviata</th><th>Stato</th><th>Avanzamento</th><th>Proposte</th><th>Chiamate LLM</th><th>Token (in/out)</th><th>Opzioni</th><th></th></tr></thead>
