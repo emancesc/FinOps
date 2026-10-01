@@ -136,7 +136,7 @@ async def extract_resource_type(resource_type: str, req: ExtractResourceTypeRequ
     Ritorna la lista di risorse normalizzate e le persiste in raw_resources.
     """
     import asyncio
-    from .aws_client import AWSClient
+    from .aws_client import AWSClient, AccountMismatchError
     from .db import upsert_resources
 
     assume_role_arn = os.environ.get("AWS_ASSUME_ROLE_ARN") or None
@@ -147,12 +147,15 @@ async def extract_resource_type(resource_type: str, req: ExtractResourceTypeRequ
             region=req.region,
             assume_role_arn=assume_role_arn,
         )
+        client.verify_account()
         resources = client.list_resources([resource_type])
         upsert_resources(req.job_id, resources)
         return [r.model_dump() for r in resources]
 
     try:
         result = await asyncio.to_thread(_run)
+    except AccountMismatchError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except Exception as exc:
         logger.exception("Errore estrazione %s", resource_type)
         raise HTTPException(status_code=500, detail=str(exc))
@@ -176,7 +179,7 @@ async def extract_config_inventory(req: ExtractConfigInventoryRequest):
     Persiste in raw_resources come le altre estrazioni.
     """
     import asyncio
-    from .aws_client import AWSClient
+    from .aws_client import AWSClient, AccountMismatchError
     from .db import upsert_resources
 
     assume_role_arn = os.environ.get("AWS_ASSUME_ROLE_ARN") or None
@@ -187,12 +190,15 @@ async def extract_config_inventory(req: ExtractConfigInventoryRequest):
             region=req.region,
             assume_role_arn=assume_role_arn,
         )
+        client.verify_account()
         resources = client.list_all_resources_from_config()
         upsert_resources(req.job_id, resources)
         return [r.model_dump() for r in resources]
 
     try:
         result = await asyncio.to_thread(_run)
+    except AccountMismatchError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except Exception as exc:
         logger.exception("Errore estrazione config-inventory")
         raise HTTPException(status_code=500, detail=str(exc))

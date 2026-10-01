@@ -9,13 +9,24 @@ import os
 import psycopg2
 import psycopg2.extras
 
-from .aws_client import NormalizedResource
+from .aws_client import AccountMismatchError, NormalizedResource
 
 logger = logging.getLogger(__name__)
 
 
 def _connect() -> psycopg2.extensions.connection:
     return psycopg2.connect(os.environ["DATABASE_URL"])
+
+
+def check_resource_accounts(job_account_id: str, resources: list[NormalizedResource]) -> None:
+    """
+    Rifiuta risorse di un account diverso da quello del job: l'upsert sposta la
+    risorsa sull'ultimo job che l'ha estratta, quindi senza questo controllo
+    risorse di un altro account finirebbero sul job sbagliato.
+    """
+    foreign = sorted({r.account_id for r in resources if r.account_id != job_account_id})
+    if foreign:
+        raise AccountMismatchError(job_account_id, ",".join(foreign))
 
 
 def upsert_resources(job_id: str, resources: list[NormalizedResource]) -> int:
@@ -30,6 +41,11 @@ def upsert_resources(job_id: str, resources: list[NormalizedResource]) -> int:
     try:
         with conn:
             with conn.cursor() as cur:
+                cur.execute("SELECT account_id FROM jobs WHERE job_id = %s::uuid", (job_id,))
+                job = cur.fetchone()
+                if job is None:
+                    raise ValueError(f"Job {job_id} inesistente")
+                check_resource_accounts(job[0], resources)
                 rows = [
                     (
                         r.resource_id,

@@ -117,6 +117,18 @@ class NormalizedResource(BaseModel):
     relationships: list[Relationship] = []
 
 
+class AccountMismatchError(Exception):
+    """Le credenziali AWS appartengono a un account diverso da quello del job."""
+
+    def __init__(self, expected: str, actual: str) -> None:
+        self.expected = expected
+        self.actual = actual
+        super().__init__(
+            f"Le credenziali AWS attive sono dell'account {actual}, "
+            f"ma il job è sull'account {expected}: cambia profilo/credenziali e riprova"
+        )
+
+
 class AWSClient:
     def __init__(
         self,
@@ -138,6 +150,16 @@ class AWSClient:
         if len(self.regions) == 1 and self.regions[0] != self.region:
             self.region = self.regions[0]
             self._session = self._new_session(self.region)
+
+    def verify_account(self) -> None:
+        """
+        Verifica che le credenziali attive appartengano all'account richiesto.
+        Senza questo controllo un'estrazione lanciata con il profilo sbagliato
+        scrive le risorse di un altro account sul job.
+        """
+        actual = self._session.client("sts").get_caller_identity()["Account"]
+        if actual != self.account_id:
+            raise AccountMismatchError(self.account_id, actual)
 
     @property
     def is_multi_region(self) -> bool:
