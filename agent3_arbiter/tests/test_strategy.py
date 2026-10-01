@@ -64,7 +64,15 @@ class _ChunkLLM(LLMClient):
 async def client():
     import app.main as main
     async with AsyncClient(transport=ASGITransport(app=main.app), base_url="http://test") as c:
-        yield c, main
+        # I test girano sul DB reale e attivare una strategy disattiva le altre:
+        # a fine test si riattiva quella che era attiva prima.
+        r = await c.get("/strategies/active")
+        previous_active = r.json()["strategy_id"] if r.status_code == 200 else None
+        try:
+            yield c, main
+        finally:
+            if previous_active:
+                await c.post(f"/strategies/{previous_active}/activate")
     main._llm_override = None
 
 
