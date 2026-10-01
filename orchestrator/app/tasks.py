@@ -226,7 +226,8 @@ def _arbitration_low_confidence_pass(job_id: str) -> None:
                        rr.resource_type
                 FROM tag_proposals tp
                 JOIN raw_resources rr
-                  ON rr.resource_id = tp.resource_id
+                  ON rr.account_id  = tp.account_id
+                 AND rr.resource_id = tp.resource_id
                  AND rr.job_id      = tp.job_id
                 WHERE tp.job_id = %s::uuid
                   AND tp.review_status = 'pending'

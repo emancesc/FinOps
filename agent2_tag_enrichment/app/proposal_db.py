@@ -205,9 +205,11 @@ def save_run_proposals(job_id: str, run_id: str, strategy_id: str, proposals: li
     conn = _connect()
     try:
         with conn, conn.cursor() as cur:
+            cur.execute("SELECT account_id FROM jobs WHERE job_id = %s::uuid", (job_id,))
+            account_id = cur.fetchone()[0]
             psycopg2.extras.execute_values(
                 cur,
-                """INSERT INTO tag_proposals (job_id, resource_id, tag_key, tag_value, confidence, source_type,
+                """INSERT INTO tag_proposals (job_id, account_id, resource_id, tag_key, tag_value, confidence, source_type,
                                               source_ref, run_id, strategy_id, reasoning, current_value)
                    VALUES %s
                    ON CONFLICT (job_id, resource_id, tag_key) DO UPDATE SET
@@ -217,10 +219,10 @@ def save_run_proposals(job_id: str, run_id: str, strategy_id: str, proposals: li
                        reasoning = EXCLUDED.reasoning, current_value = EXCLUDED.current_value,
                        review_status = 'pending', reviewed_by = NULL, updated_at = now()
                    WHERE tag_proposals.review_status = 'pending'""",
-                [(job_id, p["resource_id"], p["tag_key"], p.get("tag_value"), round(float(p.get("confidence") or 0), 2),
+                [(job_id, account_id, p["resource_id"], p["tag_key"], p.get("tag_value"), round(float(p.get("confidence") or 0), 2),
                   p.get("source_type", "llm"), p.get("source_ref"), run_id, strategy_id, p.get("reasoning"),
                   p.get("current_value")) for p in proposals],
-                template="(%s::uuid, %s, %s, %s, %s, %s, %s, %s::uuid, %s::uuid, %s, %s)")
+                template="(%s::uuid, %s, %s, %s, %s, %s, %s, %s, %s::uuid, %s::uuid, %s, %s)")
             return cur.rowcount
     finally:
         conn.close()
@@ -232,7 +234,7 @@ def list_proposals(job_id: str, run_id: Optional[str] = None, review_status: Opt
                    tag_key: Optional[str] = None, limit: int = 5000, offset: int = 0) -> list[dict]:
     sql = ("SELECT p.id, p.resource_id, r.resource_type, r.region, p.tag_key, p.tag_value, p.current_value, "
            "p.confidence, p.source_type, p.source_ref, p.reasoning, p.review_status, p.reviewed_by, p.run_id, "
-           "p.updated_at FROM tag_proposals p JOIN raw_resources r ON r.resource_id = p.resource_id "
+           "p.updated_at FROM tag_proposals p JOIN raw_resources r ON r.account_id = p.account_id AND r.resource_id = p.resource_id "
            "WHERE p.job_id = %s::uuid")
     params: list = [job_id]
     for col, val in (("p.run_id", run_id), ("p.review_status", review_status), ("p.tag_key", tag_key)):

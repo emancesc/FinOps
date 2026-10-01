@@ -118,18 +118,19 @@ def log_arbitration(
             with conn.cursor() as cur:
                 cur.execute(
                     """INSERT INTO arbitration_requests
-                           (job_id, resource_id, tag_key, context,
+                           (job_id, account_id, resource_id, tag_key, context,
                             resolution_rule_id, resolved_value, status, resolved_at)
-                       VALUES (%s::uuid, %s, %s, %s, %s::uuid, %s, %s, now())
+                       SELECT j.job_id, j.account_id, %s, %s, %s, %s::uuid, %s, %s, now()
+                       FROM jobs j WHERE j.job_id = %s::uuid
                        RETURNING request_id::text""",
                     (
-                        job_id,
                         resource_id,
                         tag_key,
                         json.dumps(context),
                         rule_id,
                         resolved_value,
                         status,
+                        job_id,
                     ),
                 )
                 return cur.fetchone()[0]

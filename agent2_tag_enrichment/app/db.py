@@ -99,9 +99,12 @@ def save_proposals(job_id: str, proposals: list[dict]) -> int:
     try:
         with conn:
             with conn.cursor() as cur:
+                cur.execute("SELECT account_id FROM jobs WHERE job_id = %s::uuid", (job_id,))
+                account_id = cur.fetchone()[0]
                 rows = [
                     (
                         job_id,
+                        account_id,
                         p["resource_id"],
                         p["tag_key"],
                         p.get("tag_value"),
@@ -114,7 +117,7 @@ def save_proposals(job_id: str, proposals: list[dict]) -> int:
                 psycopg2.extras.execute_values(
                     cur,
                     """INSERT INTO tag_proposals
-                           (job_id, resource_id, tag_key, tag_value, confidence, source_type, source_ref)
+                           (job_id, account_id, resource_id, tag_key, tag_value, confidence, source_type, source_ref)
                        VALUES %s
                        ON CONFLICT (job_id, resource_id, tag_key) DO UPDATE SET
                            tag_value  = EXCLUDED.tag_value,
@@ -122,7 +125,7 @@ def save_proposals(job_id: str, proposals: list[dict]) -> int:
                            source_ref = EXCLUDED.source_ref,
                            updated_at = now()""",
                     rows,
-                    template="(%s::uuid, %s, %s, %s, %s, %s, %s)",
+                    template="(%s::uuid, %s, %s, %s, %s, %s, %s, %s)",
                 )
                 return cur.rowcount
     finally:

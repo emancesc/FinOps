@@ -112,7 +112,7 @@ def _add_inventory(job_id):
                                  (VOLUME, "AWS::EC2::Volume", {"Name": "esse3-data"}),
                                  (QUEUE, "AWS::SQS::Queue", {})):
             cur.execute("""INSERT INTO raw_resources (resource_id, job_id, account_id, region, resource_type, current_tags, attributes)
-                           VALUES (%s, %s, %s, %s, %s, %s, '{}') ON CONFLICT (resource_id) DO UPDATE SET job_id = EXCLUDED.job_id,
+                           VALUES (%s, %s, %s, %s, %s, %s, '{}') ON CONFLICT (account_id, resource_id) DO UPDATE SET job_id = EXCLUDED.job_id,
                            current_tags = EXCLUDED.current_tags""", (arn, job_id, ACCOUNT, REGION, rtype, json.dumps(tags)))
     conn.close()
 
