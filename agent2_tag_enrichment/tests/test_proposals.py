@@ -1,7 +1,8 @@
 """
 Proposta di tagging: prerequisiti (inventario + JSON a corredo + strategy attiva), documenti
-Design/Assessment, ereditarietà volume -> istanza, LLM a batch con validazione dei valori
-ammessi, persistenza per batch, ripresa dopo errore e revisione delle proposte.
+Design/Assessment, ereditarietà volume -> istanza, una sola chiamata LLM (documenti e inventario
+come file) che restituisce regole per gruppi di risorse, validazione dei valori ammessi, ripresa
+dopo errore e revisione delle proposte.
 Richiede il PostgreSQL locale con le migrazioni applicate (scripts/apply_migrations.py).
 """
 from __future__ import annotations
@@ -29,30 +30,37 @@ INSTANCE_TAGS = {"Name": "esse3-web-01", "cineca:BusinessUnit": "UNIV", "cineca:
                  "cineca:Product": "ESSE3", "cineca:Environment": "PROD", "cineca:Service": "Tomcat"}
 
 
+def _inventory_rows(user: str) -> list[dict]:
+    """Righe di inventory.tsv dal messaggio inviato al modello."""
+    body = user.split('<file name="inventory.tsv">\n', 1)[1].split("\n</file>", 1)[0].split("\n")
+    header = body[0].split("\t")
+    return [dict(zip(header, line.split("\t"))) for line in body[1:]]
+
+
 class _FakeLLM(LLMClient):
+    """Restituisce regole: istanze (con un valore non ammesso), Role per tutti, BusinessUnit vuota per la coda."""
     _model = "fake"
 
-    def __init__(self, fail_calls: int = 0):
+    def __init__(self):
         self.requests = []
-        self.fail_calls = fail_calls
 
     async def complete(self, system, messages, response_format=None, max_tokens=4096):
-        payload = json.loads(messages[-1].content.split("\n", 1)[1])
-        self.requests.append({"system": system, "payload": payload})
-        if self.fail_calls:
-            self.fail_calls -= 1
-            raise RuntimeError("LLM non disponibile")
-        out = []
-        for res in payload["resources"]:
-            props = []
-            for t in res["tags_to_propose"]:
-                value = {"cineca:Role": "Compute-Application", "cineca:Customer": "UNIBO+NONESISTE",
-                         "cineca:Environment": "PROD", "cineca:BusinessUnit": "UNIV", "cineca:Product": "ESSE3",
-                         "cineca:Service": "Tomcat"}.get(t["tag_key"])
-                props.append({"tag_key": t["tag_key"], "value": value, "confidence": 0.8,
-                              "reasoning": "dedotto dal nome", "source_ref": "strategy §3"})
-            out.append({"resource_id": res["resource_id"], "proposals": props})
-        return LLMResponse(content=json.dumps({"resources": out}), model="fake", input_tokens=1000, output_tokens=200)
+        user = messages[-1].content
+        rows = _inventory_rows(user)
+        self.requests.append({"system": system, "user": user, "rows": rows})
+        queue_rows = [int(r["row"]) for r in rows if r["type"] == "SQS::Queue"]
+        rules = [
+            {"rule_id": "R1", "match": {"resource_types": ["EC2::Instance"], "name_regex": "^esse3-"},
+             "tags": {"cineca:Customer": "UNIBO+NONESISTE", "cineca:Role": "Compute-Application",
+                      "cineca:Environment": "PROD", "cineca:BusinessUnit": "UNIV", "cineca:Product": "ESSE3",
+                      "cineca:Service": "Tomcat"},
+             "confidence": 0.8, "reasoning": "dedotto dal nome", "source_ref": "strategy §3"},
+            {"rule_id": "R2", "match": {"rows": queue_rows}, "tags": {"cineca:BusinessUnit": None},
+             "confidence": 0.3, "reasoning": "nessuna evidenza", "source_ref": None},
+            {"rule_id": "R3", "match": {}, "tags": {"cineca:Role": "Storage-Volume"},
+             "confidence": 0.6, "reasoning": "default", "source_ref": "strategy §4"},
+        ]
+        return LLMResponse(content=json.dumps({"rules": rules}), model="fake", input_tokens=1000, output_tokens=200)
 
 
 def _conn():
@@ -191,14 +199,18 @@ async def test_generate_inherit_validate_review(api, world, tmp_path):
     assert run["status"] == "done" and run["progress_pct"] == 100.0 and run["resources_done"] == 3
     assert run["llm_calls"] == 1 and run["input_tokens"] == 1000
 
-    # system prompt con la strategy; estratto del documento LLD passato per l'istanza
+    # una sola chiamata: strategy nel system prompt, documento LLD completo e inventario come file
     sent = llm.requests[0]
     assert "cineca:Customer" in sent["system"] and "UNIBO; POLIMI; shared" in sent["system"]
-    by_id = {r["resource_id"]: r for r in sent["payload"]["resources"]}
-    assert "LLD_esse3.txt" in by_id[INSTANCE]["document_excerpts"][0]
-    # il volume eredita tutti i tag di billing e il Service dall'istanza: all'LLM chiede solo il Role
-    assert [t["tag_key"] for t in by_id[VOLUME]["tags_to_propose"]] == ["cineca:Role"]
-    assert by_id[VOLUME]["evidence"]["attached_instances"][0]["name"] == "esse3-web-01"
+    assert '<file name="LLD_esse3.txt" type="LLD">' in sent["user"] and "serve UNIBO in produzione" in sent["user"]
+    assert "assessment da rimuovere" not in sent["user"]
+    by_id = {r["id"]: r for r in sent["rows"]}
+    assert set(by_id) == {"instance/i-web01", "volume/vol-data01", "esse3-queue"}
+    assert by_id["esse3-queue"]["to_propose"] == "*"  # nessun tag: tutti quelli della strategy
+    # il volume eredita tutti i tag di billing e il Service dall'istanza: al modello chiede solo il Role
+    vol_row = by_id["volume/vol-data01"]
+    assert vol_row["to_propose"] == "cineca:Role"
+    assert "esse3-web-01" in vol_row["evidence"] and "cineca:Customer=UNIBO" in vol_row["inherited"]
 
     proposals = (await c.get("/proposals", params={"job_id": world["job_id"]})).json()
     vol = {p["tag_key"]: p for p in proposals if p["resource_id"] == VOLUME}
@@ -208,6 +220,11 @@ async def test_generate_inherit_validate_review(api, world, tmp_path):
     bad = inst["cineca:Customer"]
     assert bad["reasoning"].startswith("[VALORE NON AMMESSO") and float(bad["confidence"]) <= 0.2
     assert inst["cineca:Role"]["tag_value"] == "Compute-Application" and inst["cineca:Role"]["source_type"] == "llm"
+    assert inst["cineca:Role"]["reasoning"].startswith("[R1]")
+    # prima regola che corrisponde: R3 per il Role di volume e coda; null in R2 lascia vuota la BusinessUnit
+    assert vol["cineca:Role"]["tag_value"] == "Storage-Volume"
+    queue = {p["tag_key"]: p for p in proposals if p["resource_id"] == QUEUE}
+    assert queue["cineca:Role"]["tag_value"] == "Storage-Volume" and "cineca:BusinessUnit" not in queue
 
     r = await c.patch(f"/proposals/{bad['id']}", json={"tag_value": "UNIBO"})
     assert r.json()["review_status"] == "edited"
@@ -218,10 +235,8 @@ async def test_generate_inherit_validate_review(api, world, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_failed_batch_then_resume(api, world, monkeypatch):
+async def test_failed_call_then_resume(api, world):
     c, main = api
-    import app.proposal as proposal
-    monkeypatch.setattr(proposal, "BATCH_SIZE", 1)
     llm = _FakeLLM()
     main._llm_override = llm
     _add_inventory(world["job_id"])
@@ -230,9 +245,9 @@ async def test_failed_batch_then_resume(api, world, monkeypatch):
     calls = {"n": 0}
     original = llm.complete
 
-    async def flaky(*args, **kwargs):  # fallisce la seconda chiamata LLM
+    async def flaky(*args, **kwargs):  # fallisce la prima chiamata LLM
         calls["n"] += 1
-        if calls["n"] == 2:
+        if calls["n"] == 1:
             raise RuntimeError("timeout")
         return await original(*args, **kwargs)
 
@@ -240,15 +255,32 @@ async def test_failed_batch_then_resume(api, world, monkeypatch):
     run = (await c.post("/proposals/generate", json={"job_id": world["job_id"]})).json()
     await _wait(main, run["run_id"])
     run = (await c.get(f"/proposals/runs/{run['run_id']}")).json()
-    assert run["status"] == "error" and "batch risorse" in run["error"]
-    done_before = run["resources_done"]
-    assert 0 < done_before < 3
+    assert run["status"] == "error" and "timeout" in run["error"] and run["llm_calls"] == 0
+    # le proposte ereditate sono già salvate prima della chiamata
+    assert {p["source_type"] for p in (await c.get("/proposals", params={"job_id": world["job_id"]})).json()} == {"inheritance"}
 
     r = await c.post(f"/proposals/runs/{run['run_id']}/resume")
     assert r.status_code == 202
     await _wait(main, run["run_id"])
     run = (await c.get(f"/proposals/runs/{run['run_id']}")).json()
-    assert run["status"] == "done" and run["resources_done"] == 3
-    # le risorse già elaborate prima dell'errore non vengono ripassate all'LLM
-    seen = [r["resource_id"] for req in llm.requests for r in req["payload"]["resources"]]
-    assert len(seen) == len(set(seen))
+    assert run["status"] == "done" and run["resources_done"] == 3 and run["llm_calls"] == 1
+    assert "3/3 risorse coperte" in run["message"]
+
+
+def test_apply_rules_order_regex_and_rows():
+    from app.proposal import _Rule, apply_rules
+
+    tag = {"tag_key": "cineca:Product", "allowed_values": [{"value": "ESSE3"}, {"value": "SIRIO"}]}
+    items = [{"row": i, "resource_id": f"r{i}", "wanted": {"cineca:Product": (None, "mancante")},
+              "fields": {"type": t, "region": "eu-south-1", "name": n, "text": f"{t}\t{n}"}}
+             for i, (t, n) in enumerate([("EC2::Instance", "sirio-app"), ("EC2::Instance", "esse3-web"),
+                                         ("S3::Bucket", "logs"), ("S3::Bucket", "misc")], start=1)]
+    rules = [_Rule(rule_id="bad", match={"name_regex": "("}, tags={"cineca:Product": "SIRIO"}),
+             _Rule(rule_id="A", match={"name_regex": "^sirio"}, tags={"cineca:Product": "SIRIO"}, confidence=0.9),
+             _Rule(rule_id="B", match={"rows": [4]}, tags={"cineca:Product": None}),
+             _Rule(rule_id="C", match={"resource_types": ["AWS::EC2::Instance", "S3::Bucket"]},
+                   tags={"cineca:Product": "ESSE3"}, confidence=0.5)]
+    proposals, covered = apply_rules(rules, items, {"cineca:Product": tag})
+    assert {p["resource_id"]: (p["tag_value"], p["reasoning"][:3]) for p in proposals} == {
+        "r1": ("SIRIO", "[A]"), "r2": ("ESSE3", "[C]"), "r3": ("ESSE3", "[C]")}
+    assert covered == {"r1", "r2", "r3", "r4"}  # r4: lasciato vuoto di proposito dalla regola B

@@ -47,8 +47,8 @@ async function loadReadiness() {
   ].join("");
   $("btn-generate").disabled = !r.ready || !!r.running;
   $("estimate").textContent = r.ready
-    ? `Stima: fino a ${r.estimate.resources} risorse, al massimo ${r.estimate.llm_batches_max} chiamate LLM da ${r.estimate.batch_size} risorse `
-      + "(meno se volumi/ENI ereditano i tag dall'istanza o i tag sono già conformi)."
+    ? `Stima: fino a ${r.estimate.resources} risorse con una sola chiamata LLM `
+      + "(volumi/ENI che ereditano i tag dall'istanza e risorse già conformi non vengono passati al modello)."
       + (r.running ? " Una generazione è già in corso." : "")
     : "Generazione disponibile quando tutti i prerequisiti obbligatori sono soddisfatti.";
   return r;

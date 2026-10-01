@@ -99,8 +99,6 @@ async def enrich_status(job_id: str):
 # Documenti di progetto (Design / Assessment) e proposta di tagging
 # ---------------------------------------------------------------------------
 
-import math  # noqa: E402
-
 from fastapi import File, Form, Query, UploadFile  # noqa: E402
 
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -189,7 +187,6 @@ async def remove_document(document_id: str):
 def _readiness(job_id: str) -> dict:
     from . import proposal_db as pdb
     from .linked_evidence import linked_status
-    from .proposal import BATCH_SIZE
 
     job = pdb.get_job(job_id)
     if not job:
@@ -216,8 +213,7 @@ def _readiness(job_id: str) -> dict:
                       "release_date": strategy["release_date"], "tags": len(strategy["tags"]),
                       "rules": len(strategy["rules"]), "ok": strategy["status"] == "extracted"} if strategy else {"ok": False}),
         "documents": {"count": len(documents), "chars": sum(int(d.get("chars") or 0) for d in documents)},
-        "estimate": {"resources": resources, "llm_batches_max": math.ceil(resources / BATCH_SIZE) if resources else 0,
-                     "batch_size": BATCH_SIZE},
+        "estimate": {"resources": resources, "llm_calls": 1 if resources else 0},
         "running": pdb.running_run(job_id),
         "ready": not missing,
         "missing": missing,
@@ -285,6 +281,22 @@ async def resume_run(run_id: str):
     await asyncio.to_thread(pdb.update_run, run_id, status="queued", error=None)
     _start_run(run_id)
     return {"run_id": run_id, "status": "queued"}
+
+
+@app.post("/proposals/runs/{run_id}/cancel")
+async def cancel_run(run_id: str):
+    """Ferma un run in corso; le proposte già salvate restano e il run si può riprendere."""
+    from . import proposal_db as pdb
+    run = await asyncio.to_thread(pdb.get_run, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run non trovato")
+    task = _proposal_tasks.get(run_id)
+    if task and not task.done():
+        task.cancel()
+    if run["status"] in ("queued", "running"):
+        await asyncio.to_thread(pdb.update_run, run_id, status="cancelled", finished=True,
+                                message="Interrotto dall'operatore: usare Riprendi per continuare")
+    return await asyncio.to_thread(pdb.get_run, run_id)
 
 
 @app.get("/proposals")
