@@ -222,7 +222,8 @@ def save_run_proposals(job_id: str, run_id: str, strategy_id: str, proposals: li
                 [(job_id, account_id, p["resource_id"], p["tag_key"], p.get("tag_value"), round(float(p.get("confidence") or 0), 2),
                   p.get("source_type", "llm"), p.get("source_ref"), run_id, strategy_id, p.get("reasoning"),
                   p.get("current_value")) for p in proposals],
-                template="(%s::uuid, %s, %s, %s, %s, %s, %s, %s, %s::uuid, %s::uuid, %s, %s)")
+                template="(%s::uuid, %s, %s, %s, %s, %s, %s, %s, %s::uuid, %s::uuid, %s, %s)",
+                page_size=len(proposals))  # una sola pagina: rowcount conta tutte le righe
             return cur.rowcount
     finally:
         conn.close()

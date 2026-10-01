@@ -32,8 +32,9 @@ from .linked_evidence import EvidenceIndex
 logger = logging.getLogger(__name__)
 
 MAX_OUTPUT_TOKENS = int(os.environ.get("PROPOSAL_MAX_OUTPUT_TOKENS", "64000"))
-# ~1M token di contesto: margine per system prompt e risposta (circa 3 caratteri per token)
-MAX_INPUT_CHARS = int(os.environ.get("PROPOSAL_MAX_INPUT_CHARS", "2700000"))
+# ~1M token di contesto: margine per system prompt e risposta. Misurato su inventario e documenti
+# reali: circa 2 caratteri per token (ARN, identificativi, testo italiano)
+MAX_INPUT_CHARS = int(os.environ.get("PROPOSAL_MAX_INPUT_CHARS", "1800000"))
 CELL_CHARS = 120
 ATTRIBUTES_PER_ROW = 8
 INHERITED_TAGS = ("cineca:BusinessUnit", "cineca:Customer", "cineca:Product", "cineca:Environment", "cineca:Service")
