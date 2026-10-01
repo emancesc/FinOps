@@ -224,8 +224,10 @@ async def test_group_by_region_attribute(neo4j_client):
 async def test_search_by_region(neo4j_client):
     """
     Acceptance criteria 4: la ricerca per stringa di regione trova le risorse.
+    Regione + account di test nell'ARN: sul Neo4j condiviso le risorse reali della
+    stessa regione riempirebbero il limite di 100 risultati.
     """
-    results = neo4j_client.search("eu-south-1")
+    results = neo4j_client.search(f"{REGION}:{ACCOUNT}")
     returned_arns = {r["arn"] for r in results}
     assert ARN_EC2 in returned_arns, "EC2 non trovata dalla ricerca fulltext per regione"
 
