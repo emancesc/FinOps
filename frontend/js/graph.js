@@ -57,9 +57,9 @@ function convertNeo4jToElements(neo4jData) {
   // /graph/group restituisce una lista di nodi Resource (senza relazioni)
   if (Array.isArray(neo4jData)) neo4jData = { nodes: neo4jData, relationships: [] };
   const nodes = (neo4jData.nodes || []).map((n) => ({
-    data: { id: n.arn || n.id, label: n.resource_type || n.label || n.name || n.arn, type: n.type, ...n },
+    data: { ...n, id: n.id || n.arn, label: n.resource_type || n.label || n.name || n.arn, type: n.type },
   }));
-  const edges = (neo4jData.relationships || []).map((r, i) => ({
+  const edges = (neo4jData.edges || neo4jData.relationships || []).map((r, i) => ({
     data: { id: `e${i}`, source: r.source, target: r.target, label: r.type },
   }));
   return [...nodes, ...edges];

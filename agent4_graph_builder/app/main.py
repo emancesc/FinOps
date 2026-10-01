@@ -13,7 +13,7 @@ import asyncio
 from dotenv import load_dotenv
 load_dotenv()
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -107,6 +107,7 @@ async def build_graph(req: BuildRequest):
 async def get_resource_subgraph(
     arn: str,
     depth: int = Query(default=2, ge=1, le=5),
+    account_id: Optional[str] = Query(default=None, description="Account della risorsa: un ARN senza account esiste in più account"),
 ) -> dict[str, Any]:
     """
     Sottografo centrato sulla risorsa identificata dall'ARN.
@@ -114,7 +115,7 @@ async def get_resource_subgraph(
     entro `depth` hop. Supporta navigazione sia architettural sia per tag.
     """
     neo4j = _get_neo4j()
-    result = await asyncio.to_thread(neo4j.get_resource_subgraph, arn, depth)
+    result = await asyncio.to_thread(neo4j.get_resource_subgraph, arn, depth, account_id)
     if not result["nodes"]:
         raise HTTPException(status_code=404, detail=f"Risorsa non trovata: {arn}")
     return result

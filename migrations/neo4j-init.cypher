@@ -1,8 +1,10 @@
 // Vincoli di unicità e indici per il Knowledge Graph FinOps
 // Eseguito una sola volta al bootstrap dal container neo4j-init
 
-CREATE CONSTRAINT resource_arn_unique IF NOT EXISTS
-FOR (r:Resource) REQUIRE r.arn IS UNIQUE;
+// Risorse della piattaforma: label dedicata (la label "Resource" è usata da tagsviewer)
+// e chiave (account_id, arn), perché alcuni ARN gestiti da AWS sono uguali in ogni account
+CREATE CONSTRAINT finops_resource_key IF NOT EXISTS
+FOR (r:FinopsResource) REQUIRE (r.account_id, r.arn) IS UNIQUE;
 
 CREATE CONSTRAINT businessunit_name_unique IF NOT EXISTS
 FOR (b:BusinessUnit) REQUIRE b.name IS UNIQUE;
@@ -22,11 +24,14 @@ FOR (a:Application) REQUIRE a.name IS UNIQUE;
 CREATE CONSTRAINT environment_name_unique IF NOT EXISTS
 FOR (e:Environment) REQUIRE e.name IS UNIQUE;
 
-CREATE INDEX resource_type_idx IF NOT EXISTS
-FOR (r:Resource) ON (r.resource_type);
+CREATE INDEX finops_resource_arn IF NOT EXISTS
+FOR (r:FinopsResource) ON (r.arn);
 
-CREATE INDEX resource_account_idx IF NOT EXISTS
-FOR (r:Resource) ON (r.account_id);
+CREATE INDEX finops_resource_type IF NOT EXISTS
+FOR (r:FinopsResource) ON (r.resource_type);
 
-CREATE INDEX resource_region_idx IF NOT EXISTS
-FOR (r:Resource) ON (r.region);
+CREATE INDEX finops_resource_region IF NOT EXISTS
+FOR (r:FinopsResource) ON (r.region);
+
+CREATE INDEX finops_resource_job IF NOT EXISTS
+FOR (r:FinopsResource) ON (r.job_id);

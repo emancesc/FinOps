@@ -7,6 +7,10 @@ Navigazione supportata su due assi:
 
 APOC non disponibile su installazione nativa Windows → relazione architetturale
 costruita per interpolazione stringa con whitelist Python.
+
+I nodi risorsa hanno label FinopsResource e chiave (account_id, arn): alcuni ARN
+gestiti da AWS sono uguali in ogni account, e la label generica "Resource" è già
+usata da un'altra applicazione (tagsviewer) sulla stessa istanza Neo4j.
 """
 from __future__ import annotations
 
@@ -33,6 +37,14 @@ _ARCH_REL_WHITELIST: set[str] = {
 # ---------------------------------------------------------------------------
 # Mappa tag key → (label nodo dimensione, proprietà nodo, tipo relazione)
 # ---------------------------------------------------------------------------
+
+RESOURCE_LABEL = "FinopsResource"
+
+
+def resource_uid(account_id: str, arn: str) -> str:
+    """Identificativo univoco del nodo risorsa, usato anche come id nel frontend."""
+    return f"{account_id}|{arn}"
+
 
 _TAG_DIMENSION_MAP: dict[str, tuple[str, str, str]] = {
     "environment":   ("Environment",  "name", "IN_ENVIRONMENT"),
@@ -63,11 +75,12 @@ class Neo4jClient:
     def ensure_indexes(self) -> None:
         """Crea indici sulle proprietà di Resource più usate in navigazione."""
         with self._driver.session() as s:
-            s.run("CREATE INDEX resource_arn IF NOT EXISTS FOR (r:Resource) ON (r.arn)")
-            s.run("CREATE INDEX resource_type_idx IF NOT EXISTS FOR (r:Resource) ON (r.resource_type)")
-            s.run("CREATE INDEX resource_region_idx IF NOT EXISTS FOR (r:Resource) ON (r.region)")
-            s.run("CREATE INDEX resource_account_idx IF NOT EXISTS FOR (r:Resource) ON (r.account_id)")
-            s.run("CREATE INDEX resource_job_idx IF NOT EXISTS FOR (r:Resource) ON (r.job_id)")
+            s.run(f"CREATE CONSTRAINT finops_resource_key IF NOT EXISTS "
+                  f"FOR (r:{RESOURCE_LABEL}) REQUIRE (r.account_id, r.arn) IS UNIQUE")
+            s.run(f"CREATE INDEX finops_resource_arn IF NOT EXISTS FOR (r:{RESOURCE_LABEL}) ON (r.arn)")
+            s.run(f"CREATE INDEX finops_resource_type IF NOT EXISTS FOR (r:{RESOURCE_LABEL}) ON (r.resource_type)")
+            s.run(f"CREATE INDEX finops_resource_region IF NOT EXISTS FOR (r:{RESOURCE_LABEL}) ON (r.region)")
+            s.run(f"CREATE INDEX finops_resource_job IF NOT EXISTS FOR (r:{RESOURCE_LABEL}) ON (r.job_id)")
             # Indici sulle dimensioni tag
             s.run("CREATE INDEX env_name_idx IF NOT EXISTS FOR (e:Environment) ON (e.name)")
             s.run("CREATE INDEX bu_name_idx IF NOT EXISTS FOR (b:BusinessUnit) ON (b.name)")
@@ -86,43 +99,46 @@ class Neo4jClient:
         # Appiatto gli attributi navigabili come proprietà dirette
         flat_attrs = {k: v for k, v in attributes.items() if k in _NAVIGABLE_ATTRS}
 
+        account_id = resource.get("account_id") or ""
         tx.run(
-            """
-            MERGE (r:Resource {arn: $arn})
-            SET r.resource_type = $resource_type,
+            f"""
+            MERGE (r:{RESOURCE_LABEL} {{account_id: $account_id, arn: $arn}})
+            SET r.uid           = $uid,
+                r.resource_type = $resource_type,
                 r.region        = $region,
-                r.account_id    = $account_id,
                 r.job_id        = $job_id,
                 r.tenant_id     = $tenant_id,
                 r.tags          = $tags_json,
                 r += $flat_attrs
             """,
             arn=resource["resource_id"],
+            uid=resource_uid(account_id, resource["resource_id"]),
             resource_type=resource["resource_type"],
             region=resource.get("region", ""),
-            account_id=resource.get("account_id", ""),
+            account_id=account_id,
             job_id=resource.get("job_id", ""),
             tenant_id=tenant_id,
             tags_json=str(tags),          # stringa JSON-like per fulltext
             flat_attrs=flat_attrs,
         )
 
-    def upsert_arch_rel(self, tx, src_arn: str, rel_type: str, dst_arn: str) -> None:
-        """Crea relazione architetturale (whitelist-validated)."""
+    def upsert_arch_rel(self, tx, account_id: str, src_arn: str, rel_type: str, dst_arn: str) -> None:
+        """Crea relazione architetturale (whitelist-validated) tra risorse dello stesso account."""
         if rel_type not in _ARCH_REL_WHITELIST:
             logger.warning("Tipo relazione non ammesso ignorato: %s", rel_type)
             return
         tx.run(
             f"""
-            MATCH (src:Resource {{arn: $src_arn}})
-            MATCH (dst:Resource {{arn: $dst_arn}})
+            MATCH (src:{RESOURCE_LABEL} {{account_id: $account_id, arn: $src_arn}})
+            MATCH (dst:{RESOURCE_LABEL} {{account_id: $account_id, arn: $dst_arn}})
             MERGE (src)-[:{rel_type}]->(dst)
             """,
+            account_id=account_id,
             src_arn=src_arn,
             dst_arn=dst_arn,
         )
 
-    def upsert_tag_relationships(self, tx, arn: str, tag_key: str, tag_value: str) -> None:
+    def upsert_tag_relationships(self, tx, account_id: str, arn: str, tag_key: str, tag_value: str) -> None:
         """
         Aggiorna il valore del tag sul nodo Resource (in tags_json e come
         proprietà separata) e crea nodo dimensione + relazione tipizzata.
@@ -134,9 +150,10 @@ class Neo4jClient:
         safe_key = tag_key.replace("-", "_")
         tx.run(
             f"""
-            MATCH (r:Resource {{arn: $arn}})
+            MATCH (r:{RESOURCE_LABEL} {{account_id: $account_id, arn: $arn}})
             SET r.`tag_{safe_key}` = $value
             """,
+            account_id=account_id,
             arn=arn,
             value=tag_value,
         )
@@ -148,10 +165,11 @@ class Neo4jClient:
 
         tx.run(
             f"""
-            MATCH (r:Resource {{arn: $arn}})
+            MATCH (r:{RESOURCE_LABEL} {{account_id: $account_id, arn: $arn}})
             MERGE (d:{label} {{{prop}: $value}})
             MERGE (r)-[:{rel_type}]->(d)
             """,
+            account_id=account_id,
             arn=arn,
             value=tag_value,
         )
@@ -172,6 +190,8 @@ class Neo4jClient:
         nodes_written = 0
         rels_written = 0
         tag_rels_written = 0
+        # Relazioni e proposte arrivano con il solo ARN: l'account è quello della risorsa del job
+        account_by_arn = {r["resource_id"]: r.get("account_id") or "" for r in resources}
 
         with self._driver.session() as s:
             # Passo 1: nodi risorsa
@@ -184,8 +204,8 @@ class Neo4jClient:
                 src = rel.get("source_id") or rel.get("src_arn")
                 dst = rel.get("target_id") or rel.get("dst_arn")
                 rtype = rel.get("relationship_type") or rel.get("rel_type")
-                if src and dst and rtype:
-                    s.execute_write(self.upsert_arch_rel, src, rtype, dst)
+                if src and dst and rtype and src in account_by_arn:
+                    s.execute_write(self.upsert_arch_rel, account_by_arn[src], src, rtype, dst)
                     rels_written += 1
 
             # Passo 3: relazioni tag da proposals approvate
@@ -193,8 +213,9 @@ class Neo4jClient:
                 arn = proposal.get("resource_id")
                 tag_key = proposal.get("tag_key")
                 tag_value = proposal.get("proposed_value")
-                if arn and tag_key and tag_value:
-                    s.execute_write(self.upsert_tag_relationships, arn, tag_key, tag_value)
+                account_id = proposal.get("account_id") or account_by_arn.get(arn)
+                if arn and tag_key and tag_value and account_id is not None:
+                    s.execute_write(self.upsert_tag_relationships, account_id, arn, tag_key, tag_value)
                     tag_rels_written += 1
 
         return {
@@ -207,9 +228,11 @@ class Neo4jClient:
     # GET /graph/resource/{arn} — sottografo centrato su una risorsa
     # ------------------------------------------------------------------
 
-    def get_resource_subgraph(self, arn: str, depth: int = 2) -> dict[str, Any]:
+    def get_resource_subgraph(self, arn: str, depth: int = 2, account_id: str | None = None) -> dict[str, Any]:
         """
         Ritorna nodi e archi entro `depth` hop dalla risorsa con ARN dato.
+        Senza account_id parte da tutte le risorse con quell'ARN (un ARN senza
+        account, es. regole Route 53 Resolver autodefined, esiste in più account).
         Include sia relazioni architetturali sia relazioni verso nodi tag-dimensione.
 
         Due query separate: la prima raccoglie i nodi, la seconda le relazioni
@@ -219,11 +242,13 @@ class Neo4jClient:
         with self._driver.session() as s:
             # Query 1: tutti i nodi raggiungibili entro depth hop
             node_rec = s.run(
-                f"MATCH (start:Resource {{arn: $arn}}) "
+                f"MATCH (start:{RESOURCE_LABEL} {{arn: $arn}}) "
+                f"WHERE $account_id IS NULL OR start.account_id = $account_id "
                 f"OPTIONAL MATCH (start)-[*1..{depth}]-(n) "
-                f"WITH start, collect(DISTINCT n) AS others "
-                f"RETURN [start] + others AS all_nodes",
+                f"WITH collect(DISTINCT start) AS starts, collect(DISTINCT n) AS others "
+                f"RETURN starts + [o IN others WHERE NOT o IN starts] AS all_nodes",
                 arn=arn,
+                account_id=account_id,
             ).single()
 
             if not node_rec:
@@ -240,18 +265,14 @@ class Neo4jClient:
                 "MATCH (a)-[r]->(b) "
                 "WHERE elementId(a) IN $eids AND elementId(b) IN $eids "
                 "RETURN collect({"
-                "  source: coalesce(a.arn, elementId(a)), "
-                "  target: coalesce(b.arn, elementId(b)), "
+                "  source: coalesce(a.uid, elementId(a)), "
+                "  target: coalesce(b.uid, elementId(b)), "
                 "  type:   type(r)"
                 "}) AS all_rels",
                 eids=element_ids,
             ).single()
 
-        nodes_out = []
-        for node in raw_nodes:
-            props = dict(node)
-            props["_labels"] = list(node.labels)
-            nodes_out.append(props)
+        nodes_out = [_node_props(node) for node in raw_nodes]
 
         edges_out = rel_rec["all_rels"] if rel_rec else []
 
@@ -279,7 +300,7 @@ class Neo4jClient:
                 label, prop, rel_type = dim_info
                 result = s.run(
                     f"""
-                    MATCH (d:{label} {{{prop}: $value}})<-[:{rel_type}]-(r:Resource)
+                    MATCH (d:{label} {{{prop}: $value}})<-[:{rel_type}]-(r:{RESOURCE_LABEL})
                     RETURN r
                     """,
                     value=value,
@@ -288,17 +309,11 @@ class Neo4jClient:
                 # Navigazione diretta su attributo Resource
                 safe_dim = dimension.replace("-", "_")
                 result = s.run(
-                    f"MATCH (r:Resource) WHERE r.`{safe_dim}` = $value RETURN r",
+                    f"MATCH (r:{RESOURCE_LABEL}) WHERE r.`{safe_dim}` = $value RETURN r",
                     value=value,
                 )
 
-            rows = []
-            for record in result:
-                node = record["r"]
-                props = dict(node)
-                props["_labels"] = list(node.labels)
-                rows.append(props)
-            return rows
+            return [_node_props(record["r"]) for record in result]
 
     # ------------------------------------------------------------------
     # GET /graph/search — fulltext su arn, resource_type, tags, attributi
@@ -313,8 +328,8 @@ class Neo4jClient:
         pattern = f"(?i).*{q}.*"
         with self._driver.session() as s:
             result = s.run(
-                """
-                MATCH (r:Resource)
+                f"""
+                MATCH (r:{RESOURCE_LABEL})
                 WHERE r.arn          =~ $pat
                    OR r.resource_type =~ $pat
                    OR r.region        =~ $pat
@@ -325,13 +340,15 @@ class Neo4jClient:
                 """,
                 pat=pattern,
             )
-            rows = []
-            for record in result:
-                node = record["r"]
-                props = dict(node)
-                props["_labels"] = list(node.labels)
-                rows.append(props)
-            return rows
+            return [_node_props(record["r"]) for record in result]
+
+
+def _node_props(node) -> dict:
+    """Proprietà del nodo + id stabile (uid per le risorse, elementId per i nodi dimensione)."""
+    props = dict(node)
+    props["_labels"] = list(node.labels)
+    props["id"] = props.get("uid") or node.element_id
+    return props
 
 
 # ---------------------------------------------------------------------------

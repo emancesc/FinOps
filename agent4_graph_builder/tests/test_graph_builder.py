@@ -119,7 +119,7 @@ def neo4j_client():
     # Pulizia: rimuove i nodi creati dal test
     with client._driver.session() as s:
         s.run(
-            "MATCH (r:Resource) WHERE r.job_id = $jid DETACH DELETE r",
+            "MATCH (r:FinopsResource) WHERE r.job_id = $jid DETACH DELETE r",
             jid=JOB_ID,
         )
         s.run("MATCH (d:BusinessUnit {name: $v}) DETACH DELETE d", v=BU_VALUE)
@@ -251,12 +251,13 @@ async def test_arch_rel_whitelist_blocks_invalid(neo4j_client):
     with neo4j_client._driver.session() as s:
         s.execute_write(
             neo4j_client.upsert_arch_rel,
+            ACCOUNT,
             ARN_EC2,
             "MALICIOUS_REL_TYPE",
             ARN_VPC,
         )
         result = s.run(
-            "MATCH (a:Resource {arn: $a})-[r:MALICIOUS_REL_TYPE]->(b:Resource {arn: $b}) RETURN r",
+            "MATCH (a:FinopsResource {arn: $a})-[r:MALICIOUS_REL_TYPE]->(b:FinopsResource {arn: $b}) RETURN r",
             a=ARN_EC2, b=ARN_VPC,
         )
         assert result.single() is None, "Relazione non nella whitelist non dovrebbe esistere"
@@ -312,5 +313,29 @@ async def test_http_build_endpoint(neo4j_client, app_client, monkeypatch):
 
     # Cleanup
     with neo4j_client._driver.session() as s:
-        s.run("MATCH (r:Resource {arn: $a}) DETACH DELETE r", a=arn_ec2b)
+        s.run("MATCH (r:FinopsResource {arn: $a}) DETACH DELETE r", a=arn_ec2b)
         s.run("MATCH (e:Environment {name: 'staging'}) DETACH DELETE e")
+
+
+# ---------------------------------------------------------------------------
+# Test 9: stesso ARN in due account → due nodi distinti
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_same_arn_in_two_accounts_keeps_two_nodes(neo4j_client):
+    """Un ARN senza account (regole Route 53 Resolver autodefined) non fonde le risorse di due account."""
+    arn = f"arn:aws:route53resolver:{REGION}::autodefined-rule/rslvr-test-{uuid.uuid4().hex[:8]}"
+    accounts = ["111111111111", "222222222222"]
+    resources = [{"resource_id": arn, "job_id": JOB_ID, "account_id": a, "region": REGION,
+                  "resource_type": "AWS::Route53Resolver::ResolverRule", "attributes": {}, "tags": {}}
+                 for a in accounts]
+    try:
+        for res in resources:
+            neo4j_client.build_graph([res], [], [], TENANT)
+        both = neo4j_client.get_resource_subgraph(arn, depth=1)
+        assert sorted(n["account_id"] for n in both["nodes"]) == accounts
+        one = neo4j_client.get_resource_subgraph(arn, depth=1, account_id=accounts[1])
+        assert [n["id"] for n in one["nodes"]] == [f"{accounts[1]}|{arn}"]
+    finally:
+        with neo4j_client._driver.session() as s:
+            s.run("MATCH (r:FinopsResource {arn: $a}) DETACH DELETE r", a=arn)
