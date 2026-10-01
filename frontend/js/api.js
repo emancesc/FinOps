@@ -54,6 +54,12 @@ const api = {
     apiFetch(AGENT2_URL, `/proposals?${new URLSearchParams({ job_id: jobId, ...filters })}`),
   reviewProposal: (proposalId, payload) =>
     apiFetch(AGENT2_URL, `/proposals/${proposalId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  bulkReviewProposals: (jobId, ids, reviewStatus) =>
+    apiFetch(AGENT2_URL, "/proposals/bulk-review", {
+      method: "POST", body: JSON.stringify({ job_id: jobId, ids, review_status: reviewStatus }),
+    }),
+  proposalsExportUrl: (jobId, runId) =>
+    `${AGENT2_URL}/proposals/export.xlsx?${new URLSearchParams(runId ? { job_id: jobId, run_id: runId } : { job_id: jobId })}`,
 
   // Registro Tagging Strategy (agent3)
   listStrategies: () => apiFetch(AGENT3_URL, "/strategies"),

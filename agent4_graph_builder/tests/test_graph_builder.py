@@ -339,3 +339,25 @@ async def test_same_arn_in_two_accounts_keeps_two_nodes(neo4j_client):
     finally:
         with neo4j_client._driver.session() as s:
             s.run("MATCH (r:FinopsResource {arn: $a}) DETACH DELETE r", a=arn)
+
+
+# ---------------------------------------------------------------------------
+# Test 10: tag cineca:* (anche multi-valore) creano i nodi dimensione
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_cineca_tags_create_dimension_nodes(neo4j_client):
+    arn = f"arn:aws:ec2:{REGION}:{ACCOUNT}:instance/i-{uuid.uuid4().hex[:8]}"
+    customers = [f"TESTCUST{uuid.uuid4().hex[:6]}".upper(), f"TESTCUST{uuid.uuid4().hex[:6]}".upper()]
+    resource = {"resource_id": arn, "job_id": JOB_ID, "account_id": ACCOUNT, "region": REGION,
+                "resource_type": "AWS::EC2::Instance", "attributes": {}, "tags": {}}
+    proposals = [{"resource_id": arn, "tag_key": "cineca:Customer", "proposed_value": "+".join(customers)}]
+    try:
+        neo4j_client.build_graph([resource], [], proposals, TENANT)
+        for customer in customers:
+            found = {r["arn"] for r in neo4j_client.get_by_dimension("cineca:Customer", customer)}
+            assert arn in found, f"risorsa non raggiungibile da Customer {customer}"
+    finally:
+        with neo4j_client._driver.session() as s:
+            s.run("MATCH (r:FinopsResource {arn: $a}) DETACH DELETE r", a=arn)
+            s.run("MATCH (c:Customer) WHERE c.name IN $names DETACH DELETE c", names=customers)

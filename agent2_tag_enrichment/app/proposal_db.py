@@ -232,7 +232,8 @@ def save_run_proposals(job_id: str, run_id: str, strategy_id: str, proposals: li
 # --- revisione proposte -----------------------------------------------------
 
 def list_proposals(job_id: str, run_id: Optional[str] = None, review_status: Optional[str] = None,
-                   tag_key: Optional[str] = None, limit: int = 5000, offset: int = 0) -> list[dict]:
+                   tag_key: Optional[str] = None, limit: Optional[int] = None, offset: int = 0) -> list[dict]:
+    """limit None = tutte (LIMIT NULL in PostgreSQL)."""
     sql = ("SELECT p.id, p.resource_id, r.resource_type, r.region, p.tag_key, p.tag_value, p.current_value, "
            "p.confidence, p.source_type, p.source_ref, p.reasoning, p.review_status, p.reviewed_by, p.run_id, "
            "p.updated_at FROM tag_proposals p JOIN raw_resources r ON r.account_id = p.account_id AND r.resource_id = p.resource_id "
@@ -253,6 +254,14 @@ def review_proposal(proposal_id: str, review_status: str, tag_value: Optional[st
                                updated_at = now() WHERE id = %s::uuid""", (tag_value, reviewed_by, proposal_id))
     return _execute("""UPDATE tag_proposals SET review_status = %s, reviewed_by = %s, updated_at = now()
                        WHERE id = %s::uuid""", (review_status, reviewed_by, proposal_id))
+
+
+def bulk_review(job_id: str, ids: list[str], review_status: str, reviewed_by: Optional[str]) -> int:
+    """Stesso stato di revisione per più proposte del job (es. approva tutte le selezionate)."""
+    if not ids:
+        return 0
+    return _execute("""UPDATE tag_proposals SET review_status = %s, reviewed_by = %s, updated_at = now()
+                       WHERE job_id = %s::uuid AND id = ANY(%s::uuid[])""", (review_status, reviewed_by, job_id, ids))
 
 
 def mark_interrupted_runs() -> int:

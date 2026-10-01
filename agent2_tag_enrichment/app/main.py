@@ -301,9 +301,54 @@ async def cancel_run(run_id: str):
 
 @app.get("/proposals")
 async def get_proposals(job_id: str = Query(...), run_id: Optional[str] = None, review_status: Optional[str] = None,
-                        tag_key: Optional[str] = None, limit: int = 5000, offset: int = 0):
+                        tag_key: Optional[str] = None, limit: Optional[int] = None, offset: int = 0):
     from . import proposal_db as pdb
     return await asyncio.to_thread(pdb.list_proposals, job_id, run_id, review_status, tag_key, limit, offset)
+
+
+class BulkReview(BaseModel):
+    job_id: str
+    ids: list[str]
+    review_status: str                      # approved | rejected | pending
+    reviewed_by: Optional[str] = "operator"
+
+
+@app.post("/proposals/bulk-review")
+async def bulk_review(req: BulkReview):
+    """Approva/rifiuta/rimette in revisione più proposte in una volta (selezione o 'approva tutte')."""
+    from . import proposal_db as pdb
+    if req.review_status not in ("approved", "rejected", "pending"):
+        raise HTTPException(status_code=422, detail="review_status deve essere approved, rejected o pending")
+    n = await asyncio.to_thread(pdb.bulk_review, req.job_id, req.ids, req.review_status, req.reviewed_by)
+    return {"updated": n, "review_status": req.review_status}
+
+
+@app.get("/proposals/export.xlsx")
+async def export_proposals(job_id: str = Query(...), run_id: Optional[str] = None):
+    """Proposta in xlsx: una riga per risorsa (attuale e proposto per ogni tag), dettaglio e riepilogo."""
+    from datetime import datetime
+
+    from fastapi.responses import Response
+
+    from . import proposal_db as pdb
+    from .proposal_export import build_xlsx
+
+    def _build():
+        job = pdb.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} non trovato")
+        run = pdb.get_run(run_id) if run_id else None
+        strategy = pdb.get_strategy(run["strategy_id"] if run else None)
+        if not strategy:
+            raise HTTPException(status_code=409, detail="Nessuna Tagging Strategy attiva")
+        resources = pdb.load_resources(job_id)
+        proposals = pdb.list_proposals(job_id, run_id, None, None, limit=None, offset=0)
+        return job, build_xlsx(job, strategy, run_id, resources, proposals)
+
+    job, content = await asyncio.to_thread(_build)
+    name = f"proposta_tagging_{job.get('tenant_id') or job['account_id']}_{datetime.now():%Y%m%d_%H%M}.xlsx"
+    return Response(content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @app.patch("/proposals/{proposal_id}")

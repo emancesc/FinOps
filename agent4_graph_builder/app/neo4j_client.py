@@ -14,6 +14,7 @@ usata da un'altra applicazione (tagsviewer) sulla stessa istanza Neo4j.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any
@@ -47,6 +48,13 @@ def resource_uid(account_id: str, arn: str) -> str:
 
 
 _TAG_DIMENSION_MAP: dict[str, tuple[str, str, str]] = {
+    # Tag della CINECA Tagging Strategy
+    "cineca:BusinessUnit": ("BusinessUnit", "name", "BELONGS_TO_BU"),
+    "cineca:Customer":     ("Customer",     "name", "SERVES_CUSTOMER"),
+    "cineca:Product":      ("Product",      "name", "PART_OF_PRODUCT"),
+    "cineca:Environment":  ("Environment",  "name", "IN_ENVIRONMENT"),
+    "cineca:Service":      ("Service",      "name", "RUNS_SERVICE"),
+    # Chiavi generiche storiche
     "environment":   ("Environment",  "name", "IN_ENVIRONMENT"),
     "cost-center":   ("CostCenter",   "code", "CHARGED_TO"),
     "business-unit": ("BusinessUnit", "name", "BELONGS_TO_BU"),
@@ -59,6 +67,22 @@ _NAVIGABLE_ATTRS: set[str] = {
     "instance_type", "state", "vpc_id", "subnet_id",
     "size_gb", "volume_type", "bucket_name", "cidr_block",
 }
+
+
+def _property_value(value):
+    """
+    Neo4j accetta come proprietà solo primitivi o liste di primitivi. L'inventario da AWS
+    Config ha anche oggetti (es. state = {"value": "available"}): si prende value/name, altrimenti JSON.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        inner = value.get("value", value.get("name"))
+        if isinstance(inner, (str, int, float, bool)):
+            return inner
+    if isinstance(value, list) and all(isinstance(v, (str, int, float, bool)) for v in value):
+        return value
+    return json.dumps(value, default=str, ensure_ascii=False)
 
 
 class Neo4jClient:
@@ -97,7 +121,7 @@ class Neo4jClient:
         attributes: dict = resource.get("attributes") or {}
 
         # Appiatto gli attributi navigabili come proprietà dirette
-        flat_attrs = {k: v for k, v in attributes.items() if k in _NAVIGABLE_ATTRS}
+        flat_attrs = {k: _property_value(v) for k, v in attributes.items() if k in _NAVIGABLE_ATTRS}
 
         account_id = resource.get("account_id") or ""
         tx.run(
@@ -163,15 +187,18 @@ class Neo4jClient:
             return
         label, prop, rel_type = dim
 
+        # Tag multi-valore della strategy (es. cineca:Customer "UNIBO+POLIMI"): un nodo per valore
+        values = [v.strip() for v in tag_value.split("+")] if tag_key.startswith("cineca:") else [tag_value]
         tx.run(
             f"""
             MATCH (r:{RESOURCE_LABEL} {{account_id: $account_id, arn: $arn}})
-            MERGE (d:{label} {{{prop}: $value}})
+            UNWIND $values AS value
+            MERGE (d:{label} {{{prop}: value}})
             MERGE (r)-[:{rel_type}]->(d)
             """,
             account_id=account_id,
             arn=arn,
-            value=tag_value,
+            values=[v for v in values if v],
         )
 
     def build_graph(

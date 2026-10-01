@@ -284,3 +284,39 @@ def test_apply_rules_order_regex_and_rows():
     assert {p["resource_id"]: (p["tag_value"], p["reasoning"][:3]) for p in proposals} == {
         "r1": ("SIRIO", "[A]"), "r2": ("ESSE3", "[C]"), "r3": ("ESSE3", "[C]")}
     assert covered == {"r1", "r2", "r3", "r4"}  # r4: lasciato vuoto di proposito dalla regola B
+
+
+@pytest.mark.asyncio
+async def test_bulk_review_and_xlsx_export(api, world):
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    c, main = api
+    main._llm_override = _FakeLLM()
+    _add_inventory(world["job_id"])
+    _add_linked_json(world["root"])
+    run = (await c.post("/proposals/generate", json={"job_id": world["job_id"]})).json()
+    await _wait(main, run["run_id"])
+    proposals = (await c.get("/proposals", params={"job_id": world["job_id"]})).json()
+    ids = [p["id"] for p in proposals]
+
+    r = await c.post("/proposals/bulk-review", json={"job_id": world["job_id"], "ids": ids, "review_status": "approved"})
+    assert r.status_code == 200 and r.json()["updated"] == len(ids)
+    statuses = {p["review_status"] for p in (await c.get("/proposals", params={"job_id": world["job_id"]})).json()}
+    assert statuses == {"approved"}
+    # un id di un altro job non viene toccato
+    r = await c.post("/proposals/bulk-review", json={"job_id": str(uuid.uuid4()), "ids": ids[:1], "review_status": "rejected"})
+    assert r.json()["updated"] == 0
+
+    r = await c.get("/proposals/export.xlsx", params={"job_id": world["job_id"], "run_id": run["run_id"]})
+    assert r.status_code == 200 and "attachment" in r.headers["content-disposition"]
+    wb = load_workbook(BytesIO(r.content), read_only=True)
+    assert wb.sheetnames == ["Proposta", "Dettaglio proposte", "Summary"]
+    rows = list(wb["Proposta"].iter_rows(values_only=True))
+    header, by_arn = rows[0], {row[3]: dict(zip(rows[0], row)) for row in rows[1:]}
+    assert header[:4] == ("Region", "Service", "ResourceType", "Arn") and "cineca:Customer (proposto)" in header
+    assert set(by_arn) == {INSTANCE, VOLUME, QUEUE}
+    assert by_arn[VOLUME]["cineca:Customer (proposto)"] == "UNIBO"           # ereditato dall'istanza
+    assert by_arn[VOLUME]["cineca_mandatory_compliant"] == "NO"
+    assert len(list(wb["Dettaglio proposte"].iter_rows(values_only=True))) == len(ids) + 1

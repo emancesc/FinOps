@@ -35,9 +35,11 @@
             ENI, certificati ACM, stack CloudFormation, usati come evidenze e per l'ereditarietà volume → istanza;</li>
           <li><strong>Tagging Strategy attiva</strong> con le regole estratte.</li>
         </ol>
-        <p>I documenti di Design (HLD/LLD) e Assessment sono facoltativi ma migliorano molto la proposta: gli estratti
-          pertinenti a ciascuna risorsa (per nome) vengono passati all'LLM. Ogni valore proposto viene verificato contro i
-          valori ammessi della strategy; le proposte si rivedono nella pagina <em>Revisione Tag</em>.</p>
+        <p>I documenti di Design (HLD/LLD) e Assessment sono facoltativi ma migliorano molto la proposta. La generazione
+          usa <strong>una sola chiamata LLM</strong>: strategy, documenti completi e inventario (una riga per risorsa con
+          evidenze) vengono passati come file; il modello restituisce regole per gruppi di risorse, applicate e verificate
+          contro i valori ammessi della strategy. Le proposte si rivedono, approvano ed esportano in xlsx nella pagina
+          <em>Revisione Tag</em>; solo le proposte <strong>approvate</strong> entrano nel knowledge graph.</p>
       </div>
       <div class="form-row">
         <div class="form-group" style="flex:2">

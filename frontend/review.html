@@ -41,14 +41,23 @@
           <label><input type="checkbox" id="f-invalid" /> Solo valori non ammessi</label>
         </div>
       </div>
+      <div class="form-row" style="align-items:center; gap:0.5rem; flex-wrap:wrap">
+        <button type="button" class="btn btn-secondary btn-sm" id="btn-select-all">Seleziona tutte (filtro)</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="btn-select-none">Deseleziona</button>
+        <button type="button" class="btn btn-success btn-sm" id="btn-approve-selected" disabled>Approva selezionate</button>
+        <button type="button" class="btn btn-danger btn-sm" id="btn-reject-selected" disabled>Rifiuta selezionate</button>
+        <button type="button" class="btn btn-primary btn-sm" id="btn-approve-all">Approva tutte da rivedere</button>
+        <a class="btn btn-secondary btn-sm" id="btn-export" href="#">Esporta XLSX</a>
+        <span class="muted" id="selection"></span>
+      </div>
       <p class="muted" id="count"></p>
       <div class="table-wrap">
         <table id="proposals-table" class="compact">
           <thead>
-            <tr><th>Risorsa</th><th>Tag</th><th>Attuale</th><th>Proposto</th><th>Conf.</th><th>Fonte</th><th>Motivazione</th><th>Stato</th><th></th></tr>
+            <tr><th><input type="checkbox" id="chk-page" title="Seleziona le righe mostrate" /></th><th>Risorsa</th><th>Tag</th><th>Attuale</th><th>Proposto</th><th>Conf.</th><th>Fonte</th><th>Motivazione</th><th>Stato</th><th></th></tr>
           </thead>
           <tbody id="proposals-body">
-            <tr><td colspan="9" style="text-align:center; color:#6b7280;">Caricamento…</td></tr>
+            <tr><td colspan="10" style="text-align:center; color:#6b7280;">Caricamento…</td></tr>
           </tbody>
         </table>
       </div>
@@ -61,6 +70,8 @@
     const runId = params.get("run_id");
     const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     let proposals = [];
+    let filtered = [];
+    const selected = new Set();
 
     function badgeHtml(status) {
       const cls = { pending: "badge-pending", approved: "badge-approved", rejected: "badge-rejected", edited: "badge-proposed" }[status] || "";
@@ -72,15 +83,17 @@
       const tag = document.getElementById("f-tag").value;
       const text = document.getElementById("f-text").value.trim().toLowerCase();
       const onlyInvalid = document.getElementById("f-invalid").checked;
-      const rows = proposals.filter((p) => (!status || p.review_status === status) && (!tag || p.tag_key === tag)
+      const rows = filtered = proposals.filter((p) => (!status || p.review_status === status) && (!tag || p.tag_key === tag)
         && (!onlyInvalid || (p.reasoning || "").startsWith("[VALORE NON AMMESSO"))
         && (!text || [p.resource_id, p.tag_value, p.reasoning].join(" ").toLowerCase().includes(text)));
       document.getElementById("count").textContent = `${rows.length} proposte` + (rows.length > 1000 ? " (mostrate le prime 1000)" : "")
         + (runId ? " — esecuzione selezionata" : "");
       const tbody = document.getElementById("proposals-body");
-      if (!rows.length) { tbody.innerHTML = "<tr><td colspan='9' style='text-align:center'>Nessuna proposta.</td></tr>"; return; }
+      updateSelection();
+      if (!rows.length) { tbody.innerHTML = "<tr><td colspan='10' style='text-align:center'>Nessuna proposta.</td></tr>"; return; }
       tbody.innerHTML = rows.slice(0, 1000).map((p) => `
         <tr>
+          <td><input type="checkbox" class="chk-row" data-id="${p.id}" ${selected.has(p.id) ? "checked" : ""} /></td>
           <td title="${esc(p.resource_id)}"><div>${esc(p.resource_id.split(":").slice(5).join(":") || p.resource_id)}</div>
             <div class="muted">${esc(p.resource_type)} — ${esc(p.region)}</div></td>
           <td>${esc(p.tag_key)}</td>
@@ -98,15 +111,34 @@
         </tr>`).join("");
     }
 
+    function updateSelection() {
+      const shown = filtered.slice(0, 1000);
+      document.getElementById("selection").textContent = selected.size ? `${selected.size} selezionate` : "";
+      document.getElementById("btn-approve-selected").disabled = !selected.size;
+      document.getElementById("btn-reject-selected").disabled = !selected.size;
+      document.getElementById("chk-page").checked = shown.length > 0 && shown.every((p) => selected.has(p.id));
+    }
+
+    async function bulkReview(ids, status, label) {
+      if (!ids.length) return;
+      if (!confirm(`${label}: ${ids.length} proposte. Confermi?`)) return;
+      try {
+        const r = await api.bulkReviewProposals(jobId, ids, status);
+        selected.clear();
+        await loadProposals();
+        document.getElementById("selection").textContent = `${r.updated} proposte aggiornate (${status})`;
+      } catch (err) { alert("Errore: " + err.message); }
+    }
+
     async function loadProposals() {
-      if (!jobId) { document.getElementById("proposals-body").innerHTML = "<tr><td colspan='9'>Nessun job selezionato.</td></tr>"; return; }
+      if (!jobId) { document.getElementById("proposals-body").innerHTML = "<tr><td colspan='10'>Nessun job selezionato.</td></tr>"; return; }
       try {
         proposals = await api.listProposals(jobId, runId ? { run_id: runId } : {});
         const tags = [...new Set(proposals.map((p) => p.tag_key))].sort();
         document.getElementById("f-tag").innerHTML = '<option value="">Tutti</option>' + tags.map((t) => `<option>${esc(t)}</option>`).join("");
         render();
       } catch (err) {
-        document.getElementById("proposals-body").innerHTML = `<tr><td colspan='9'>Errore: ${esc(err.message)}</td></tr>`;
+        document.getElementById("proposals-body").innerHTML = `<tr><td colspan='10'>Errore: ${esc(err.message)}</td></tr>`;
       }
     }
 
@@ -123,6 +155,26 @@
 
     ["f-status", "f-tag", "f-invalid"].forEach((id) => document.getElementById(id).addEventListener("change", render));
     document.getElementById("f-text").addEventListener("input", render);
+    document.getElementById("proposals-body").addEventListener("change", (e) => {
+      if (!e.target.classList.contains("chk-row")) return;
+      e.target.checked ? selected.add(e.target.dataset.id) : selected.delete(e.target.dataset.id);
+      updateSelection();
+    });
+    document.getElementById("chk-page").addEventListener("change", (e) => {
+      filtered.slice(0, 1000).forEach((p) => (e.target.checked ? selected.add(p.id) : selected.delete(p.id)));
+      render();
+    });
+    // tutte le proposte che rispettano il filtro corrente, anche oltre le 1000 mostrate
+    document.getElementById("btn-select-all").addEventListener("click", () => { filtered.forEach((p) => selected.add(p.id)); render(); });
+    document.getElementById("btn-select-none").addEventListener("click", () => { selected.clear(); render(); });
+    document.getElementById("btn-approve-selected").addEventListener("click", () =>
+      bulkReview([...selected], "approved", "Approva selezionate"));
+    document.getElementById("btn-reject-selected").addEventListener("click", () =>
+      bulkReview([...selected], "rejected", "Rifiuta selezionate"));
+    document.getElementById("btn-approve-all").addEventListener("click", () =>
+      bulkReview(proposals.filter((p) => p.review_status === "pending").map((p) => p.id), "approved",
+        "Approva tutte le proposte da rivedere" + (runId ? " dell'esecuzione selezionata" : " del job")));
+    if (jobId) document.getElementById("btn-export").href = api.proposalsExportUrl(jobId, runId);
     loadProposals();
   </script>
 </body>

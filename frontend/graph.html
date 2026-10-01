@@ -22,6 +22,17 @@
   <main>
     <h1>Esplorazione Knowledge Graph</h1>
     <div class="card">
+      <div style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
+        <div style="flex:2; min-width:260px;">
+          <label for="job-select">Job</label>
+          <select id="job-select"></select>
+        </div>
+        <button class="btn btn-primary" id="btn-build" onclick="buildGraph()">Costruisci grafo</button>
+      </div>
+      <p class="muted" id="build-status">Il grafo contiene le risorse del job e i tag delle proposte <strong>approvate</strong>
+        (o modificate) nella pagina Revisione Tag: va ricostruito dopo ogni approvazione.</p>
+    </div>
+    <div class="card">
       <div style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap; margin-bottom:1rem;">
         <div style="flex:1; min-width:200px;">
           <label>ARN risorsa (sottografo)</label>
@@ -32,7 +43,14 @@
           <label>Dimensione di raggruppamento</label>
           <select id="dim-select">
             <!-- valori allineati a agent4 (_TAG_DIMENSION_MAP e attributi del nodo Resource) -->
-            <optgroup label="Tag">
+            <optgroup label="Tag CINECA">
+              <option value="cineca:BusinessUnit">cineca:BusinessUnit</option>
+              <option value="cineca:Customer">cineca:Customer</option>
+              <option value="cineca:Product">cineca:Product</option>
+              <option value="cineca:Environment">cineca:Environment</option>
+              <option value="cineca:Service">cineca:Service</option>
+            </optgroup>
+            <optgroup label="Tag (chiavi generiche)">
               <option value="business-unit">Business Unit</option>
               <option value="environment">Environment</option>
               <option value="cost-center">Cost Center</option>
@@ -68,6 +86,7 @@
   <script src="js/graph.js"></script>
   <script>
     graphModule.initGraph("graph-container");
+    loadJobs();
 
     // Mostra dettaglio al click su un nodo
     document.addEventListener("DOMContentLoaded", () => {
@@ -82,6 +101,31 @@
         }
       }, 200);
     });
+
+    async function loadJobs() {
+      const jobs = await api.listJobs().catch(() => []);
+      const last = localStorage.getItem("last_job_id");
+      document.getElementById("job-select").innerHTML = jobs.map((j) =>
+        `<option value="${j.job_id}" ${j.job_id === last ? "selected" : ""}>${j.tenant_id} — ${j.account_id} — ${j.region} (${j.phase})</option>`).join("");
+    }
+
+    async function buildGraph() {
+      const jobId = document.getElementById("job-select").value;
+      if (!jobId) return;
+      const status = document.getElementById("build-status");
+      const btn = document.getElementById("btn-build");
+      btn.disabled = true;
+      status.textContent = "Costruzione del grafo in corso… (alcuni minuti per migliaia di risorse)";
+      try {
+        const r = await api.buildGraph(jobId);
+        status.textContent = `Grafo aggiornato: ${r.nodes_written} risorse, ${r.arch_rels_written} relazioni architetturali, `
+          + `${r.tag_rels_written} tag da proposte approvate.`;
+      } catch (err) {
+        status.textContent = "Errore: " + err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
 
     async function loadByArn() {
       const arn = document.getElementById("arn-input").value.trim();

@@ -73,7 +73,7 @@ def load_relationships_for_job(job_id: str) -> list[dict]:
 
 def load_approved_proposals_for_job(job_id: str) -> list[dict]:
     """
-    Carica tag_proposals con review_status='approved'.
+    Carica le tag_proposals revisionate: approvate o con valore modificato dall'operatore.
     Alias: tag_value → proposed_value (chiave attesa da neo4j_client.py).
     """
     conn = _connect()
@@ -86,7 +86,7 @@ def load_approved_proposals_for_job(job_id: str) -> list[dict]:
                        confidence
                 FROM tag_proposals
                 WHERE job_id = %s::uuid
-                  AND review_status = 'approved'
+                  AND review_status IN ('approved', 'edited')
                 """,
                 (job_id,),
             )
