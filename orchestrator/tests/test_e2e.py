@@ -296,10 +296,10 @@ def test_arbitration_auto_approves_pending_proposals(job_id, monkeypatch):
                 )
                 cur.execute(
                     """INSERT INTO tag_proposals
-                           (job_id, resource_id, tag_key, tag_value, confidence, source_type)
-                       VALUES (%s::uuid, %s, %s, %s, %s, %s)
+                           (job_id, account_id, resource_id, tag_key, tag_value, confidence, source_type)
+                       VALUES (%s::uuid, %s, %s, %s, %s, %s, %s)
                        ON CONFLICT DO NOTHING""",
-                    (job_id, resource_id, "environment", "production", 0.9, "document"),
+                    (job_id, "111111111111", resource_id, "environment", "production", 0.9, "document"),
                 )
     finally:
         conn.close()

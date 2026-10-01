@@ -107,3 +107,14 @@ def get_tenant_id_for_job(job_id: str) -> str | None:
             return row[0] if row else None
     finally:
         conn.close()
+
+
+def record_graph_build(job_id: str, stats: dict) -> None:
+    """Data e statistiche dell'ultima costruzione del grafo (stato del job nella dashboard)."""
+    conn = _connect()
+    try:
+        with conn, conn.cursor() as cur:
+            cur.execute("UPDATE jobs SET graph_built_at = now(), graph_stats = %s, updated_at = now() WHERE job_id = %s::uuid",
+                        (json.dumps(stats), job_id))
+    finally:
+        conn.close()

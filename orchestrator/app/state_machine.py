@@ -56,12 +56,16 @@ def advance(job_id: str) -> dict:
         with conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
-                    "SELECT job_id, phase, progress_pct FROM jobs WHERE job_id = %s FOR UPDATE",
+                    "SELECT job_id, phase, progress_pct, workflow_managed FROM jobs WHERE job_id = %s FOR UPDATE",
                     (job_id,),
                 )
                 row = cur.fetchone()
                 if not row:
                     raise ValueError(f"Job {job_id} non trovato")
+                if row["workflow_managed"]:
+                    # fase derivata dai dati (app/workflow.py): la pipeline non deve sovrascriverla
+                    raise PermissionError(f"Job {job_id} gestito dal flusso interattivo (inventario, proposta, "
+                                          "revisione, grafo): la pipeline non può avanzarlo")
 
                 previous_phase = row["phase"]
                 if previous_phase in ("completed", "failed"):

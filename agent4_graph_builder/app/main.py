@@ -76,6 +76,7 @@ async def build_graph(req: BuildRequest):
         load_relationships_for_job,
         load_approved_proposals_for_job,
         get_tenant_id_for_job,
+        record_graph_build,
     )
 
     # Risolvi tenant_id
@@ -97,6 +98,7 @@ async def build_graph(req: BuildRequest):
         neo4j.build_graph, resources, relationships, proposals, tenant_id
     )
 
+    await asyncio.to_thread(record_graph_build, req.job_id, stats)
     logger.info(
         "Graph build job=%s tenant=%s %s", req.job_id, tenant_id, stats
     )

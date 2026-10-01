@@ -304,6 +304,8 @@ async def test_http_build_endpoint(neo4j_client, app_client, monkeypatch):
     monkeypatch.setattr(db_module, "load_relationships_for_job", fake_rels)
     monkeypatch.setattr(db_module, "load_approved_proposals_for_job", fake_proposals)
     monkeypatch.setattr(db_module, "get_tenant_id_for_job", fake_tenant)
+    recorded = {}
+    monkeypatch.setattr(db_module, "record_graph_build", lambda jid, stats: recorded.update({jid: stats}))
 
     async with AsyncClient(transport=ASGITransport(app=main_module.app), base_url="http://test") as client:
         resp = await client.post("/graph/build", json={"job_id": job_id2, "tenant_id": TENANT})
@@ -312,6 +314,7 @@ async def test_http_build_endpoint(neo4j_client, app_client, monkeypatch):
     body = resp.json()
     assert body["nodes_written"] == 1
     assert body["tag_rels_written"] >= 1
+    assert recorded[job_id2]["nodes_written"] == 1  # data e statistiche salvate sul job
 
     # Cleanup
     with neo4j_client._driver.session() as s:

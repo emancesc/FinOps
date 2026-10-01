@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from .db import get_pool, close_pool, _row_to_dict
 from .models import JobCreateRequest, JobResponse, AdvanceResponse
 from .state_machine import advance as sm_advance, fail as sm_fail
+from . import workflow
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
 logger = logging.getLogger(__name__)
@@ -89,7 +90,15 @@ async def list_jobs() -> list[dict]:
         rows = await conn.fetch(
             "SELECT * FROM jobs ORDER BY created_at DESC LIMIT 100"
         )
-    return [_row_to_dict(r) for r in rows]
+        out = []
+        for r in rows:
+            job = dict(r)
+            wf = await workflow.sync(conn, job)
+            if wf and (wf["phase"] != "created" or job.get("workflow_managed")):
+                job.update(phase=wf["phase"], progress_pct=wf["progress_pct"], status_detail=wf["status_detail"],
+                           workflow_managed=True)
+            out.append(_row_to_dict(job))
+    return out
 
 
 @app.get("/jobs/{job_id}")
@@ -101,9 +110,30 @@ async def get_job(job_id: str) -> dict:
         raise HTTPException(400, "job_id non valido")
     async with pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM jobs WHERE job_id = $1", uid)
-    if not row:
-        raise HTTPException(404, f"Job {job_id} non trovato")
+        if not row:
+            raise HTTPException(404, f"Job {job_id} non trovato")
+        if await workflow.sync(conn, dict(row)) is not None:
+            row = await conn.fetchrow("SELECT * FROM jobs WHERE job_id = $1", uid)
     return _row_to_dict(row)
+
+
+@app.get("/jobs/{job_id}/workflow")
+async def get_job_workflow(job_id: str) -> dict:
+    """Passi del flusso (inventario, JSON a corredo, documenti, proposta, revisione, grafo) e fase derivata."""
+    pool = await get_pool()
+    try:
+        uid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(400, "job_id non valido")
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM jobs WHERE job_id = $1", uid)
+        if not row:
+            raise HTTPException(404, f"Job {job_id} non trovato")
+        job = dict(row)
+        wf = await workflow.sync(conn, job) or await workflow.compute(conn, job)
+    wf["managed"] = workflow.is_workflow_job(job)
+    wf["job_phase"] = job["phase"]
+    return wf
 
 
 @app.post("/jobs/{job_id}/advance")
@@ -114,6 +144,8 @@ async def advance_job(job_id: str) -> AdvanceResponse:
     """
     try:
         result = await asyncio.to_thread(sm_advance, job_id)
+    except PermissionError as exc:
+        raise HTTPException(409, str(exc))
     except ValueError as exc:
         raise HTTPException(404, str(exc))
     except Exception as exc:
@@ -148,6 +180,8 @@ async def job_websocket(websocket: WebSocket, job_id: str) -> None:
         while True:
             async with pool.acquire() as conn:
                 row = await conn.fetchrow("SELECT * FROM jobs WHERE job_id = $1", uid)
+                if row and await workflow.sync(conn, dict(row)) is not None:
+                    row = await conn.fetchrow("SELECT * FROM jobs WHERE job_id = $1", uid)
             if row:
                 await websocket.send_json(_row_to_dict(row))
             else:

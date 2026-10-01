@@ -31,6 +31,7 @@ async function uploadForm(baseUrl, path, formData) {
 const api = {
   createJob: (payload) => apiFetch(ORCHESTRATOR_URL, "/jobs", { method: "POST", body: JSON.stringify(payload) }),
   getJob: (jobId) => apiFetch(ORCHESTRATOR_URL, `/jobs/${jobId}`),
+  getJobWorkflow: (jobId) => apiFetch(ORCHESTRATOR_URL, `/jobs/${jobId}/workflow`),
   listJobs: () => apiFetch(ORCHESTRATOR_URL, "/jobs"),
 
   // Inventario (agent1): tutte le risorse AWS Config multi-regione + analisi tagging

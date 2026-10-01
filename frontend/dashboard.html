@@ -30,6 +30,15 @@
       </div>
       <p style="margin-top:0.5rem; font-size:0.8rem; color:#6b7280"><span id="progress-pct">0</span>%</p>
     </div>
+    <div class="card" id="workflow-card">
+      <h2>Avanzamento</h2>
+      <p class="muted" id="workflow-note">Stato calcolato dai dati del job: inventario, JSON a corredo, documenti,
+        proposta di tagging, revisione e knowledge graph.</p>
+      <table class="compact" id="workflow-table">
+        <thead><tr><th>Passo</th><th>Stato</th><th>Dettaglio</th><th>Ultimo aggiornamento</th><th></th></tr></thead>
+        <tbody><tr><td colspan="5" class="muted">Caricamento…</td></tr></tbody>
+      </table>
+    </div>
     <div class="card">
       <h2>Log eventi</h2>
       <div id="log" style="font-family:monospace; font-size:0.8rem; max-height:300px; overflow-y:auto; background:#f3f4f6; padding:1rem; border-radius:6px;"></div>
@@ -75,7 +84,36 @@
       }
     }
 
+    const STEP_STATUS = {
+      done: ["badge-approved", "completato"], in_progress: ["badge-pending", "in corso"], todo: ["badge-proposed", "da fare"],
+      error: ["badge-rejected", "errore"], optional: ["", "facoltativo"],
+    };
+    const escHtml = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    let workflowTimer = null;
+
+    async function loadWorkflow() {
+      clearTimeout(workflowTimer);
+      try {
+        const wf = await api.getJobWorkflow(jobId);
+        document.getElementById("workflow-note").textContent = wf.managed
+          ? "Stato calcolato dai dati del job (la fase del job si aggiorna di conseguenza)."
+          : "Job della pipeline automatica o annullato: la fase del job non viene derivata da questi passi.";
+        document.getElementById("workflow-table").querySelector("tbody").innerHTML = wf.steps.map((s) => {
+          const [cls, label] = STEP_STATUS[s.status] || ["", s.status];
+          const next = s.key === wf.next_step ? " <strong>← prossimo passo</strong>" : "";
+          return `<tr><td>${escHtml(s.label)}</td><td><span class="badge ${cls}">${label}</span>${next}</td>
+            <td>${escHtml(s.detail)}</td><td class="muted">${escHtml((s.at || "").slice(0, 16).replace("T", " "))}</td>
+            <td>${s.link ? `<a class="btn btn-secondary btn-sm" href="${s.link}">Apri</a>` : ""}</td></tr>`;
+        }).join("");
+      } catch (err) {
+        document.getElementById("workflow-table").querySelector("tbody").innerHTML =
+          `<tr><td colspan="5" class="muted">Errore: ${escHtml(err.message)}</td></tr>`;
+      }
+      workflowTimer = setTimeout(loadWorkflow, 10000);
+    }
+
     if (jobId) {
+      loadWorkflow();
       // Carica stato iniziale
       api.getJob(jobId).then((job) => { showScope(job); updateJobUI(job); }).catch(() => appendLog("Impossibile caricare job"));
       // Aggiornamenti real-time
